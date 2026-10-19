@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Plan de Papá</title>
+<meta name="theme-color" content="#2A52C4">
+<meta name="robots" content="noindex,nofollow">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Plan de Papá">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="app.css">
+</head>
+<body data-page="athlete">
+
+<header class="top">
+  <div class="wrap">
+    <div class="brand" id="brand">Plan de Papá</div>
+    <div id="hdr"></div>
+  </div>
+</header>
+<main id="app"><div class="wrap section"><p class="muted">Cargando la programación…</p></div></main>
+<div id="dock"></div>
+
+<div id="sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="t-name">
+  <div class="sheet-in">
+    <span class="eyebrow" id="t-name">Descanso</span>
+    <div class="t-ring">
+      <svg viewBox="0 0 120 120" aria-hidden="true">
+        <circle cx="60" cy="60" r="52" fill="none" stroke="var(--field)" stroke-width="10"/>
+        <circle id="t-arc" cx="60" cy="60" r="52" fill="none" stroke="var(--accent)" stroke-width="10" stroke-linecap="round" transform="rotate(-90 60 60)" stroke-dasharray="326.73" stroke-dashoffset="0"/>
+      </svg>
+      <div class="t-digits" id="t-left">1:00</div>
+    </div>
+    <p class="muted" id="t-msg">Respira y prepárate para la siguiente serie.</p>
+    <div class="t-btns">
+      <button type="button" class="btn" id="t-minus">−15 s</button>
+      <button type="button" class="btn" id="t-plus">+15 s</button>
+      <button type="button" class="btn primary" id="t-close">Cerrar</button>
+    </div>
+  </div>
+</div>
+<div id="hiit" class="hiit" hidden role="dialog" aria-modal="true" aria-label="Temporizador HIIT" data-phase="prep">
+  <div class="h-top"><div><div id="h-pos">Serie 1 de 3</div><div class="h-dots" id="h-dots"></div></div><button type="button" class="h-x" id="h-close">Salir</button></div>
+  <div class="h-main" aria-live="polite">
+    <div class="h-phase" id="h-phase">Prepárate</div>
+    <div class="h-time" id="h-time">10</div>
+    <div class="h-next" id="h-next"></div>
+    <div class="h-ex" id="h-ex"></div>
+    <div class="h-sub" id="h-sub"></div>
+    <div class="h-vid" id="h-vid" hidden><img id="h-img" alt="" hidden><video id="h-video" muted loop playsinline preload="auto" hidden></video></div>
+  </div>
+  <div>
+    <div class="h-meta"><span id="h-el">0:00</span><span id="h-left">quedan 0:00</span></div>
+    <div class="h-bar"><i id="h-bar"></i></div>
+    <div class="h-ctrl" id="h-ctrl"></div>
+  </div>
+</div>
+<div id="toast" role="status" hidden></div>
+
+<script src="vendor/supabase.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
