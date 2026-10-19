@@ -207,8 +207,8 @@ function cardVideo(e) {
   return null;
 }
 function playerHtml(cv, e) {
-  if (cv.kind === 'file') return `<div class="vidbox"><video controls playsinline preload="metadata" src="${esc(cv.src)}"></video></div>`;
-  return `<div class="vidbox embed${cv.m.vertical ? ' vertical' : ''}"><iframe src="${esc(embedSrc(cv.m, { autoplay: true }))}" title="Vídeo: ${esc(e.name)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
+  if (cv.kind === 'file') return `<div class="vidbox"><video controls muted playsinline preload="metadata" src="${esc(cv.src)}"></video></div>`;
+  return `<div class="vidbox embed${cv.m.vertical ? ' vertical' : ''}"><iframe src="${esc(embedSrc(cv.m, { autoplay: true, muted: true }))}" title="Vídeo: ${esc(e.name)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
 }
 /* Coach editor: what a pasted link will turn into. */
 function linkPreview(raw) {
@@ -766,7 +766,7 @@ function mediaEditor(e, wi, ei) {
     const isImg = kind === 'image', id = isImg ? exImage(e) : exVideo(e), key = `${kind}:${wi}:${ei}`;
     const noun = isImg ? 'imagen' : 'vídeo';
     if (S.uploading === key) return `<div class="upl"><span class="muted">Subiendo ${noun}… no cierres la página.</span></div>`;
-    if (id) return `<div class="upl">${isImg ? `<img src="${mediaUrl(id)}" alt="">` : `<video controls playsinline preload="metadata" src="${mediaUrl(id)}"></video>`}
+    if (id) return `<div class="upl">${isImg ? `<img src="${mediaUrl(id)}" alt="">` : `<video controls muted playsinline preload="metadata" src="${mediaUrl(id)}"></video>`}
       <span class="muted" style="flex:1;min-width:140px">${isImg ? 'Imagen' : 'Vídeo'} guardado en «${esc(e.name)}». ${isImg ? 'Sale en la tarjeta y en el temporizador.' : 'Sale en todas las semanas con este ejercicio.'}</span>
       <button type="button" class="btn ghost danger" data-act="mediarm" data-kind="${kind}" data-w="${wi}" data-e="${ei}">${ic('trash')}Quitar ${noun}</button></div>`;
     if (!S.assets) return '';
@@ -973,6 +973,7 @@ function renderInbox() {
 }
 
 /* ---------- events ---------- */
+document.addEventListener('play', ev => { const v = ev.target; if (v && v.tagName === 'VIDEO' && !v.dataset.soundOk) { v.muted = true; v.dataset.soundOk = '1'; } }, true);
 document.addEventListener('error', ev => {
   const el = ev.target;
   if (!el || el.tagName !== 'IMG' || !el.hasAttribute('data-try')) return;
@@ -1051,7 +1052,7 @@ async function onClick(e) {
       const opening = !S.vidOpen.has(id);
       if (opening) S.vidOpen.add(id); else S.vidOpen.delete(id);
       render(true);
-      if (opening) { const v = document.querySelector(`#ex-${CSS.escape(id)} video`); if (v) v.play().catch(() => {}); }
+      if (opening) { const v = document.querySelector(`#ex-${CSS.escape(id)} video`); if (v) { v.muted = true; v.play().catch(() => {}); } }
       return;
     }
     case 'send': return sendFeedback(S.open);
