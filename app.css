@@ -154,6 +154,19 @@ button.pill .ic{color:var(--accent)}
 .ximg{display:block;width:100%;max-height:260px;object-fit:contain;border-radius:12px;background:var(--field)}
 .vidbox video{display:block;width:100%;max-height:65vh}
 .xlinks{display:flex;flex-wrap:wrap;gap:8px}
+.vidbox.embed{aspect-ratio:16/9;max-width:100%}
+.vidbox.embed.vertical{aspect-ratio:9/16;height:min(70vh,640px);margin-inline:auto}
+.vidbox iframe{display:block;width:100%;height:100%;border:0}
+.ythumb{position:relative;display:block;width:100%;padding:0;border:0;border-radius:12px;overflow:hidden;cursor:pointer;background:#000}
+.ythumb img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover}
+.ythumb .pb{position:absolute;inset:0;display:grid;place-items:center}
+.ythumb .pb>span{width:68px;height:68px;border-radius:50%;background:rgb(0 0 0 / .62);color:#FFFFFF;display:grid;place-items:center}
+.ythumb .pb .ic{width:30px;height:30px}
+.lprev{display:flex;align-items:center;gap:10px;font-size:14px;color:var(--muted)}
+.lprev:empty{display:none}
+.lprev img,.lprev video{width:96px;height:64px;flex:none;object-fit:cover;border-radius:8px;background:var(--field)}
+.lprev .ok{color:var(--done);font-weight:700}
+.lprev .bad{color:var(--danger);font-weight:700}
 .mynote summary{cursor:pointer;color:var(--muted);font-size:15px;font-weight:700;list-style:none;display:inline-flex;align-items:center;gap:6px;min-height:36px}
 .mynote summary::-webkit-details-marker{display:none}
 .mynote[open] summary{margin-bottom:6px}
@@ -295,6 +308,7 @@ textarea.inp{resize:vertical;min-height:84px}
 .h-vid{width:100%;max-width:440px;border-radius:16px;overflow:hidden;background:rgb(0 0 0 / .2);margin-top:6px}
 .h-vid video{display:block;width:100%;max-height:24vh;object-fit:contain}
 .h-vid img{display:block;width:100%;max-height:30vh;object-fit:contain;background:#FFFFFF}
+.h-vid iframe{display:block;width:100%;aspect-ratio:16/9;max-height:30vh;border:0;pointer-events:none;background:#000}
 .h-meta{display:flex;justify-content:space-between;font-family:var(--f-mono);font-size:14px;opacity:.9}
 .h-bar{height:8px;border-radius:999px;background:rgb(255 255 255 / .25);overflow:hidden;margin-top:6px}
 .h-bar i{display:block;height:100%;width:0;background:var(--phase-ink)}

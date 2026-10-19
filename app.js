@@ -143,18 +143,88 @@ const slug = n => fold(n).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').sl
 function libOf(e) { return S.lib[slug(e && e.name)] || {}; }
 function exVideo(e) { return validAsset(e.videoAsset) || validAsset(libOf(e).videoAsset); }
 function exImage(e) { return validAsset(e.imageAsset) || validAsset(libOf(e).imageAsset); }
-/* patch: {videoAsset?, imageAsset?}; '' clears that media. The doc goes away once it holds neither. */
+/* Library per exercise name: uploaded image, uploaded video and a pasted link. patch: '' clears that field; the doc goes away once empty. */
+const LIBF = ['videoAsset', 'imageAsset', 'link'];
+const libVal = (f, v) => f === 'link' ? safeUrl(v) : validAsset(v);
 async function saveLib(name, patch) {
   const k = slug(name); if (!k) return;
   const cur = S.lib[k] || {};
-  const next = { name: String(name).trim(), videoAsset: validAsset(cur.videoAsset), imageAsset: validAsset(cur.imageAsset) };
-  for (const f of ['videoAsset', 'imageAsset']) if (f in patch) next[f] = validAsset(patch[f]);
-  if (S.lib[k] && next.videoAsset === validAsset(cur.videoAsset) && next.imageAsset === validAsset(cur.imageAsset)) return;
+  const next = { name: String(name).trim() };
+  for (const f of LIBF) next[f] = libVal(f, f in patch ? patch[f] : cur[f]);
+  if (S.lib[k] && LIBF.every(f => next[f] === libVal(f, cur[f]))) return;
   try {
-    if (!next.videoAsset && !next.imageAsset) { if (S.lib[k]) await write('library/' + k, ref => ref.delete()); return; }
+    if (LIBF.every(f => !next[f])) { if (S.lib[k]) await write('library/' + k, ref => ref.delete()); return; }
     await write('library/' + k, ref => ref.set({ ...next, updatedAt: new Date().toISOString() }));
   } catch {}
 }
+
+/* ---------- pasted links: YouTube, Vimeo, Google Drive, direct images and videos ---------- */
+const normUrl = u => { u = String(u || '').trim(); if (u && !/^[a-z][a-z0-9+.-]*:\/\//i.test(u) && /^[\w-]+(\.[\w-]+)+([/?#]|$)/.test(u)) u = 'https://' + u; return u; };
+const libLink = e => safeUrl(libOf(e).link);
+const exLink = e => safeUrl(normUrl(e.video)) || libLink(e);
+function parseT(t) { if (!t) return 0; const m = String(t).match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/); return m ? (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0) : 0; }
+function parseMedia(raw) {
+  const u = safeUrl(normUrl(raw)); if (!u) return null;
+  let url; try { url = new URL(u); } catch { return null; }
+  const h = url.hostname.toLowerCase().replace(/^(www|m)\./, ''), path = url.pathname;
+  if (h === 'youtu.be' || h === 'youtube.com' || h === 'music.youtube.com' || h === 'youtube-nocookie.com') {
+    let id = h === 'youtu.be' ? path.slice(1).split('/')[0] : path === '/watch' ? url.searchParams.get('v') : ((path.match(/^\/(shorts|embed|live|v)\/([\w-]+)/) || [])[2]);
+    if (id && /^[\w-]{11}$/.test(id)) return { kind: 'youtube', id, url: u, start: parseT(url.searchParams.get('t') || url.searchParams.get('start')), vertical: path.startsWith('/shorts/') };
+  }
+  if (h === 'vimeo.com' || h === 'player.vimeo.com') {
+    const m = path.match(/(\d{6,})(?:\/([0-9a-f]{6,}))?/);
+    if (m) return { kind: 'vimeo', id: m[1], hash: url.searchParams.get('h') || m[2] || '', url: u };
+  }
+  if (h === 'drive.google.com') {
+    const id = (path.match(/\/file\/d\/([\w-]+)/) || [])[1] || url.searchParams.get('id');
+    if (id) return { kind: 'drive', id, url: u };
+  }
+  const p = path.toLowerCase();
+  if (/\.(mp4|webm|m4v|mov)$/.test(p)) return { kind: 'video', url: u };
+  if (/\.(jpe?g|png|gif|webp|avif|svg)$/.test(p)) return { kind: 'image', url: u };
+  return { kind: 'link', url: u };
+}
+function embedSrc(m, o = {}) {
+  if (m.kind === 'youtube') return `https://www.youtube-nocookie.com/embed/${m.id}?rel=0&playsinline=1&modestbranding=1${m.start ? `&start=${m.start}` : ''}${o.autoplay ? '&autoplay=1' : ''}${o.muted ? '&mute=1' : ''}${o.loop ? `&loop=1&playlist=${m.id}&controls=0` : ''}`;
+  if (m.kind === 'vimeo') return `https://player.vimeo.com/video/${m.id}?playsinline=1${m.hash ? `&h=${m.hash}` : ''}${o.autoplay ? '&autoplay=1' : ''}${o.muted ? '&muted=1' : ''}${o.loop ? '&loop=1&controls=0' : ''}`;
+  if (m.kind === 'drive') return `https://drive.google.com/file/d/${m.id}/preview`;
+  return '';
+}
+const ytThumb = m => `https://i.ytimg.com/vi/${m.id}/hqdefault.jpg`;
+const LINKNAME = { youtube: 'YouTube', vimeo: 'Vimeo', drive: 'Drive' };
+/* What the exercise card shows: a picture (uploaded, else a linked image) and a player (uploaded video, else a linked video). */
+function cardImage(e) {
+  const im = exImage(e); if (im) return { src: mediaUrl(im) };
+  const m = parseMedia(exLink(e));
+  if (m && (m.kind === 'image' || m.kind === 'link')) return { src: m.url, try: true };
+  return null;
+}
+function cardVideo(e) {
+  const va = exVideo(e); if (va) return { kind: 'file', src: mediaUrl(va) };
+  const m = parseMedia(exLink(e)); if (!m) return null;
+  if (m.kind === 'video') return { kind: 'file', src: m.url };
+  if (m.kind === 'youtube' || m.kind === 'vimeo' || m.kind === 'drive') return { kind: 'embed', m };
+  return null;
+}
+function playerHtml(cv, e) {
+  if (cv.kind === 'file') return `<div class="vidbox"><video controls playsinline preload="metadata" src="${esc(cv.src)}"></video></div>`;
+  return `<div class="vidbox embed${cv.m.vertical ? ' vertical' : ''}"><iframe src="${esc(embedSrc(cv.m, { autoplay: true }))}" title="Vídeo: ${esc(e.name)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
+}
+/* Coach editor: what a pasted link will turn into. */
+function linkPreview(raw) {
+  if (!String(raw || '').trim()) return '';
+  const m = parseMedia(raw);
+  if (!m) return `<span class="bad">Pega un enlace completo, que empiece por https://</span>`;
+  const ok = t => `<span><span class="ok">✓ ${t}</span></span>`;
+  if (m.kind === 'youtube') return `<img src="${esc(ytThumb(m))}" alt="">${ok(`Vídeo de YouTube${m.vertical ? ' (Short)' : ''} · se verá dentro de la app`)}`;
+  if (m.kind === 'vimeo') return ok('Vídeo de Vimeo · se verá dentro de la app');
+  if (m.kind === 'drive') return `<span><span class="ok">✓ Archivo de Google Drive</span><br>Compártelo como «Cualquier persona con el enlace».</span>`;
+  if (m.kind === 'video') return `<video muted playsinline preload="metadata" src="${esc(m.url)}"></video>${ok('Vídeo · se verá dentro de la app')}`;
+  if (m.kind === 'image') return `<img src="${esc(m.url)}" alt="" data-try>${ok('Imagen · sale en la tarjeta y en el temporizador')}`;
+  return `<img src="${esc(m.url)}" alt="" data-try><span>Se intentará mostrar como imagen. Si no se puede, Papá verá un botón para abrir el enlace.</span>`;
+}
+/* Bring a saved link into the editor when the exercise name already has one. */
+function prepEx(ex) { if (!String(ex.video || '').trim() && libLink(ex)) ex.video = libLink(ex); ex._had = String(ex.video || '').trim(); return ex; }
 
 /* ---------- toast ---------- */
 let toastT;
@@ -209,6 +279,7 @@ const fmtSec = s => `${Math.floor(s / 60)}:${String(Math.max(0, s) % 60).padStar
 let pending = false;
 function busy() {
   if ([...$app.querySelectorAll('video')].some(v => !v.paused && !v.ended)) return true;
+  if ($app.querySelector('.vidbox iframe')) return true;
   const a = document.activeElement;
   return a && $app.contains(a) && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'file'].includes(a.type)));
 }
@@ -258,7 +329,7 @@ const planTotal = P => P.reduce((a, p) => a + p.d, 0);
 const fmtLong = s => { s = Math.max(0, Math.round(s)); return s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}` : fmtSec(s); };
 
 const $h = document.getElementById('hiit');
-const H = { P: [], i: 0, end: 0, left: 0, paused: false, done: false, int: null, exs: [], cfg: null, wid: null, beep: null, armed: false, armT: null, vsrc: '' };
+const H = { bad: new Set(), fsrc: '', P: [], i: 0, end: 0, left: 0, paused: false, done: false, int: null, exs: [], cfg: null, wid: null, beep: null, armed: false, armT: null, vsrc: '' };
 function tone(freq, dur) {
   try { const ctx = T.audio; if (!ctx) return; const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = freq; g.gain.value = 0.2; o.connect(g); g.connect(ctx.destination); o.start(); o.stop(ctx.currentTime + dur); } catch {}
 }
@@ -270,7 +341,7 @@ function hiitStart(wid) {
   if (!P.length) { toast('Este entreno no tiene ejercicios.'); return; }
   try { T.audio = T.audio || new (window.AudioContext || window.webkitAudioContext)(); T.audio.resume && T.audio.resume(); } catch {}
   try { navigator.wakeLock && navigator.wakeLock.request('screen').then(l => H.lock = l).catch(() => {}); } catch {}
-  Object.assign(H, { P, exs, cfg, wid, done: false, armed: false, vsrc: '', isrc: '' });
+  Object.assign(H, { P, exs, cfg, wid, done: false, armed: false, vsrc: '', isrc: '', fsrc: '' });
   document.getElementById('h-dots').innerHTML = Array.from({ length: cfg.sets }, () => '<i></i>').join('');
   $h.hidden = false; document.documentElement.style.overflow = 'hidden';
   hiitGo(0);
@@ -297,6 +368,16 @@ function hiitTick() {
   if (s >= 1 && s <= 3 && H.beep !== s) { H.beep = s; tone(700, 0.1); }
   hiitPaint();
 }
+/* Timer picture: uploaded image, then a linked image, then uploaded video, linked video, and last a muted looping YouTube/Vimeo/Drive player. */
+function timerMedia(ex) {
+  const im = exImage(ex); if (im) return { t: 'img', src: mediaUrl(im) };
+  const m = parseMedia(exLink(ex));
+  if (m && (m.kind === 'image' || m.kind === 'link') && !H.bad.has(m.url)) return { t: 'img', src: m.url, try: true };
+  const va = exVideo(ex); if (va) return { t: 'video', src: mediaUrl(va) };
+  if (m && m.kind === 'video') return { t: 'video', src: m.url };
+  if (m && (m.kind === 'youtube' || m.kind === 'vimeo' || m.kind === 'drive')) return { t: 'frame', src: embedSrc(m, { autoplay: true, muted: true, loop: true }) };
+  return null;
+}
 const PHASE = { work: 'Trabajo', rest: 'Descanso', setrest: 'Descanso entre series', prep: 'Prepárate' };
 function hiitPaint() {
   const p = H.P[H.i], ex = H.exs[p.ex] || {}, c = H.cfg;
@@ -309,12 +390,16 @@ function hiitPaint() {
   document.getElementById('h-next').textContent = p.t === 'work' ? 'Ahora' : 'Siguiente';
   document.getElementById('h-ex').textContent = ex.name || '';
   document.getElementById('h-sub').textContent = p.t === 'setrest' ? `Serie ${p.set} de ${c.sets} a continuación` : [ex.load, ex.notes].filter(Boolean).join(' · ');
-  const im = exImage(ex), va = im ? '' : exVideo(ex), box = document.getElementById('h-vid'), v = document.getElementById('h-video'), img = document.getElementById('h-img');
-  box.hidden = !(im || va);
-  img.hidden = !im; if (im && H.isrc !== im) { H.isrc = im; img.src = mediaUrl(im); img.alt = ex.name || ''; }
-  v.hidden = !va;
-  if (va) { if (H.vsrc !== va) { H.vsrc = va; v.src = mediaUrl(va); } if (v.paused) v.play().catch(() => {}); }
+  const tm = timerMedia(ex), box = document.getElementById('h-vid'), v = document.getElementById('h-video'), img = document.getElementById('h-img'), fr = document.getElementById('h-frame');
+  box.hidden = !tm;
+  img.hidden = !(tm && tm.t === 'img');
+  if (tm && tm.t === 'img' && H.isrc !== tm.src) { H.isrc = tm.src; if (tm.try) img.setAttribute('data-try', ''); else img.removeAttribute('data-try'); img.src = tm.src; img.alt = ex.name || ''; }
+  v.hidden = !(tm && tm.t === 'video');
+  if (tm && tm.t === 'video') { if (H.vsrc !== tm.src) { H.vsrc = tm.src; v.src = tm.src; } if (v.paused) v.play().catch(() => {}); }
   else if (H.vsrc) { H.vsrc = ''; v.pause(); v.removeAttribute('src'); v.load(); }
+  fr.hidden = !(tm && tm.t === 'frame');
+  if (tm && tm.t === 'frame') { if (H.fsrc !== tm.src) { H.fsrc = tm.src; fr.src = tm.src; } }
+  else if (H.fsrc) { H.fsrc = ''; fr.src = 'about:blank'; }
   const total = planTotal(H.P), el = H.P.slice(0, H.i).reduce((a, q) => a + q.d, 0) + (p.d - H.left / 1000);
   document.getElementById('h-el').textContent = fmtLong(el);
   document.getElementById('h-left').textContent = `quedan ${fmtLong(total - el)}`;
@@ -340,7 +425,7 @@ function hiitFinish() {
   document.getElementById('h-sub').textContent = 'Al cerrar, los ejercicios quedan marcados como hechos. Cuéntale a tu entrenador cómo te ha ido.';
   document.getElementById('h-pos').textContent = `${H.cfg.sets} series terminadas`;
   document.querySelectorAll('#h-dots i').forEach(d => d.classList.add('on'));
-  document.getElementById('h-vid').hidden = true; document.getElementById('h-video').pause();
+  document.getElementById('h-vid').hidden = true; document.getElementById('h-video').pause(); document.getElementById('h-frame').src = 'about:blank'; H.fsrc = '';
   document.getElementById('h-bar').style.width = '100%';
   document.getElementById('h-left').textContent = 'quedan 0:00'; document.getElementById('h-el').textContent = fmtLong(total);
   const ctrl = document.getElementById('h-ctrl'); ctrl.dataset.s = 'fin'; ctrl.classList.add('fin');
@@ -352,6 +437,7 @@ function hiitFinish() {
 function hiitClose() {
   clearInterval(H.int); H.int = null; $h.hidden = true; document.documentElement.style.overflow = '';
   const v = document.getElementById('h-video'); v.pause();
+  document.getElementById('h-frame').src = 'about:blank'; H.fsrc = '';
   try { H.lock && H.lock.release(); } catch {} H.lock = null;
   const wasDone = H.done; H.paused = false; H.done = false;
   render(true);
@@ -426,7 +512,7 @@ function renderAthlete() {
     const fb = S.feedback[x.id];
     const n = (x.exercises || []).filter(e => e.name).length;
     const dd = dayDate(w, x);
-    const vids = (x.exercises || []).filter(e => e.name && exVideo(e)).length;
+    const vids = (x.exercises || []).filter(e => e.name && cardVideo(e)).length;
     return `<button type="button" class="wcard ${fb ? 'is-done' : ''}" data-act="open" data-id="${esc(x.id)}">
       <span class="wday"><small>${esc(dayAbbr(x))}</small><b>${dd ? dd.getDate() : ic('cal')}</b></span>
       <span class="wbody"><span class="h3">${esc(x.title || 'Entreno')}</span>
@@ -474,7 +560,8 @@ function renderWorkout(wid, ro) {
   const exHtml = exs.map((e, i) => {
     const on = editing ? !!d.checks[e.id] : !!(fb.exercises && fb.exercises[e.id] && fb.exercises[e.id].done);
     const myNote = editing ? (d.notes[e.id] || '') : (fb.exercises && fb.exercises[e.id] && fb.exercises[e.id].note) || '';
-    const yt = safeUrl(e.video), va = exVideo(e), vOpen = va && S.vidOpen.has(e.id), im = exImage(e);
+    const ci = cardImage(e), cv = cardVideo(e), lm = parseMedia(exLink(e)), vOpen = !!cv && S.vidOpen.has(e.id);
+    const thumb = !vOpen && !ci && cv && cv.kind === 'embed' && cv.m.kind === 'youtube';
     const pills = [];
     if (hc.on) pills.push(`<span class="pill">${ic('timer')}<b>${hc.work} s</b><small>${hc.reps > 1 ? `× ${hc.reps} · ` : ''}trabajo</small></span>`);
     else if (e.sets || e.reps) pills.push(`<span class="pill">${ic('repeat')}<b>${e.sets && e.reps ? `${esc(e.sets)} × ${esc(e.reps)}` : e.sets ? `${esc(e.sets)} series` : esc(e.reps)}</b></span>`);
@@ -482,13 +569,14 @@ function renderWorkout(wid, ro) {
     if (e.rest && !hc.on) pills.push(`<button type="button" class="pill" data-act="timer" data-sec="${parseRest(e.rest)}" data-name="${esc(e.name)}" aria-label="Empezar descanso de ${esc(e.rest)}">${ic('timer')}<b>${esc(e.rest)}</b><small>Iniciar</small></button>`);
     return `<article class="xcard ${on ? 'checked' : ''}" id="ex-${esc(e.id)}">
       <div class="xtop"><span class="xnum">${i + 1}</span><h3>${esc(e.name)}</h3></div>
-      ${im ? `<img class="ximg" src="${mediaUrl(im)}" alt="${esc(e.name)}" loading="lazy">` : ''}
+      ${ci && !vOpen ? `<img class="ximg" src="${esc(ci.src)}" alt="${esc(e.name)}" loading="lazy"${ci.try ? ' data-try' : ''}>` : ''}
+      ${thumb ? `<button type="button" class="ythumb" data-act="vid" data-id="${esc(e.id)}" aria-label="Ver vídeo de ${esc(e.name)}"><img src="${esc(ytThumb(cv.m))}" alt="" loading="lazy"><span class="pb"><span>${ic('play')}</span></span></button>` : ''}
       ${pills.length ? `<div class="pills">${pills.join('')}</div>` : ''}
       ${e.notes ? `<p class="xnote">${esc(e.notes)}</p>` : ''}
-      ${vOpen ? `<div class="vidbox"><video controls playsinline preload="metadata" src="${mediaUrl(va)}"></video></div>` : ''}
-      ${(va || yt) ? `<div class="xlinks">
-        ${va ? `<button type="button" class="btn" data-act="vid" data-id="${esc(e.id)}" aria-expanded="${!!vOpen}">${vOpen ? `${ic('close')}Ocultar vídeo` : `${ic('play')}Ver vídeo`}</button>` : ''}
-        ${yt ? `<a class="btn ghost" href="${esc(yt)}" target="_blank" rel="noopener">${ic('link')}YouTube</a>` : ''}
+      ${vOpen ? playerHtml(cv, e) : ''}
+      ${((cv && !thumb) || vOpen || lm) ? `<div class="xlinks">
+        ${cv && (!thumb || vOpen) ? `<button type="button" class="btn" data-act="vid" data-id="${esc(e.id)}" aria-expanded="${vOpen}">${vOpen ? `${ic('close')}${ci ? 'Ver imagen' : 'Ocultar vídeo'}` : `${ic('play')}${cv.kind === 'embed' && cv.m.kind === 'drive' ? 'Ver archivo' : 'Ver vídeo'}`}</button>` : ''}
+        ${lm ? `<a class="btn ghost" href="${esc(lm.url)}" target="_blank" rel="noopener">${ic('link')}${LINKNAME[lm.kind] ? `Abrir en ${LINKNAME[lm.kind]}` : 'Abrir enlace'}</a>` : ''}
       </div>` : ''}
       ${editing ? `<details class="mynote" ${myNote ? 'open' : ''}><summary>${ic('note')}${myNote ? 'Tu nota' : 'Añadir una nota'}</summary>
           <input class="inp" id="exn-${esc(e.id)}" data-exnote="${esc(e.id)}" value="${esc(myNote)}" placeholder="Ej.: me molestó la rodilla, subí a 8 kg"></details>`
@@ -710,7 +798,8 @@ function renderEditor(ro) {
         <div class="ex-top"><span class="xnum">${ei + 1}</span>${inp('name', 'Ejercicio', 'Sentadilla a caja')}</div>
         ${x.hiit && x.hiit.on ? inp('load', 'Carga', '8 kg') : `<div class="grid4">${inp('sets', 'Series', '3')}${inp('reps', 'Reps / tiempo', '10 o 30 s')}${inp('load', 'Carga', '8 kg')}${inp('rest', 'Descanso', '60 s')}</div>`}
         ${inp('notes', 'Indicaciones', 'Baja controlado, 3 s')}
-        ${inp('video', 'Enlace de YouTube (se abre fuera)', 'https://youtube.com/…')}
+        <label class="f"><span>Enlace de imagen o vídeo</span><input class="inp" type="url" inputmode="url" autocomplete="off" id="f-${b('video')}" data-bind="${b('video')}" value="${esc(e.video)}" placeholder="YouTube, Vimeo, Drive, .jpg, .gif, .mp4…"></label>
+        <div class="lprev" id="lp-${wi}-${ei}">${linkPreview(e.video)}</div>
         ${mediaEditor(e, wi, ei)}
         <div class="ex-tools">
           <button type="button" class="btn ghost" data-act="exup" data-w="${wi}" data-e="${ei}" aria-label="Subir ejercicio" ${ei === 0 ? 'disabled' : ''}>${ic('up')}</button>
@@ -763,6 +852,7 @@ function setBind(path, v) {
   else if (p[0] === 'w') d.workouts[+p[1]][p[2]] = v;
   else if (p[0] === 'e') d.workouts[+p[1]].exercises[+p[2]][p[3]] = v;
   else if (p[0] === 'h') { const x = d.workouts[+p[1]]; x.hiit = { ...(x.hiit || {}), [p[2]]: v }; }
+  if (p[0] === 'e' && p[3] === 'video') { const lp = document.getElementById(`lp-${p[1]}-${p[2]}`); if (lp) lp.innerHTML = linkPreview(v); }
   if (p[0] === 'h' || (p[0] === 'e' && p[3] === 'name')) { const el = document.getElementById('htot-' + p[1]); if (el) el.innerHTML = hiitTotalText(d.workouts[+p[1]]); }
   if (!S.edit.dirty) { S.edit.dirty = true; const el = document.getElementById('dirty'); if (el) el.textContent = 'Sin guardar'; }
 }
@@ -775,18 +865,25 @@ async function saveWeek() {
   d.workouts = d.workouts.map(x => ({
     id: x.id, day: t(x.day), title: t(x.title), format: t(x.format), warmup: t(x.warmup), notes: t(x.notes),
     hiit: x.hiit && x.hiit.on ? hiitCfg(x) : null,
-    exercises: x.exercises.map(e => ({ id: e.id, name: t(e.name), sets: t(e.sets), reps: t(e.reps), load: t(e.load), rest: t(e.rest), notes: t(e.notes), video: t(e.video), videoAsset: validAsset(e.videoAsset), imageAsset: validAsset(e.imageAsset) })).filter(e => e.name)
+    exercises: x.exercises.map(e => ({ id: e.id, name: t(e.name), sets: t(e.sets), reps: t(e.reps), load: t(e.load), rest: t(e.rest), notes: t(e.notes), video: normUrl(e.video), videoAsset: validAsset(e.videoAsset), imageAsset: validAsset(e.imageAsset), _had: e._had || '' })).filter(e => e.name)
   })).filter(x => x.title || x.exercises.length);
   if (!d.title) d.title = 'Semana ' + (S.weeks.findIndex(w => w.id === d.id) + 1 || S.weeks.length + 1);
-  const bad = d.workouts.flatMap(x => x.exercises).find(e => e.video && !safeUrl(e.video));
-  if (bad) { toast(`El enlace de «${bad.name}» debe empezar por https://`); return; }
+  const allEx = d.workouts.flatMap(x => x.exercises);
+  const bad = allEx.find(e => e.video && !safeUrl(e.video));
+  if (bad) { toast(`El enlace de «${bad.name}» no es válido. Pega el enlace completo, que empiece por https://`); return; }
+  const libPatches = allEx.map(e => {
+    const patch = {};
+    if (e.videoAsset) patch.videoAsset = e.videoAsset;
+    if (e.imageAsset) patch.imageAsset = e.imageAsset;
+    if (e.video) patch.link = e.video;
+    else if (e._had && libLink(e) === safeUrl(normUrl(e._had))) patch.link = '';
+    return [e.name, patch];
+  });
+  allEx.forEach(e => { delete e._had; });
   d.updatedAt = new Date().toISOString();
   try {
     await write('weeks/' + d.id, ref => ref.set(d));
-    for (const e of d.workouts.flatMap(x => x.exercises)) {
-      const patch = {}; if (e.videoAsset) patch.videoAsset = e.videoAsset; if (e.imageAsset) patch.imageAsset = e.imageAsset;
-      if (Object.keys(patch).length) await saveLib(e.name, patch);
-    }
+    for (const [name, patch] of libPatches) if (Object.keys(patch).length) await saveLib(name, patch);
     S.edit = null; S.armed = null; toast('Semana guardada. Papá ya la puede ver.');
     render(true); window.scrollTo({ top: 0 });
   } catch {}
@@ -876,11 +973,29 @@ function renderInbox() {
 }
 
 /* ---------- events ---------- */
+document.addEventListener('error', ev => {
+  const el = ev.target;
+  if (!el || el.tagName !== 'IMG' || !el.hasAttribute('data-try')) return;
+  if (el.id === 'h-img') { H.bad.add(el.getAttribute('src')); H.isrc = ''; if (!$h.hidden && !H.done) hiitPaint(); return; }
+  el.hidden = true;
+}, true);
 
 
 $app.addEventListener('change', e => {
   const t = e.target;
   if (t.dataset.upload) return uploadMedia(t);
+  if (t.dataset.bind && S.edit) {
+    const p = t.dataset.bind.split(':');
+    if (p[0] === 'e' && p[3] === 'name') {
+      const ex = S.edit.draft.workouts[+p[1]].exercises[+p[2]];
+      if (!String(ex.video || '').trim() && libLink(ex)) {
+        prepEx(ex);
+        const li = document.getElementById(`f-e:${p[1]}:${p[2]}:video`); if (li) li.value = ex.video;
+        const lp = document.getElementById(`lp-${p[1]}-${p[2]}`); if (lp) lp.innerHTML = linkPreview(ex.video);
+      }
+    }
+    return;
+  }
   if (t.dataset.hon != null && S.edit) {
     const x = S.edit.draft.workouts[+t.dataset.hon];
     x.hiit = t.checked ? { ...HD, ...(x.hiit || {}), on: true } : { ...(x.hiit || {}), on: false };
@@ -951,11 +1066,11 @@ async function onClick(e) {
       render(true); return window.scrollTo({ top: 0 });
     }
     case 'editwk': { const w = S.weeks.find(x => x.id === id); if (!w) return;
-      const draft = clone(w); draft.workouts = (draft.workouts || []).map(x => ({ ...blankWo(), ...x, exercises: (x.exercises || []).map(ex => ({ ...blankEx(), ...ex })) }));
+      const draft = clone(w); draft.workouts = (draft.workouts || []).map(x => ({ ...blankWo(), ...x, exercises: (x.exercises || []).map(ex => prepEx({ ...blankEx(), ...ex })) }));
       S.edit = { isNew: false, dirty: false, openWo: 0, draft }; render(true); return window.scrollTo({ top: 0 }); }
     case 'dupwk': { const w = S.weeks.find(x => x.id === id); if (!w) return;
       const c = clone(w); c.id = uid(); c.order = nextOrder(); c.title = `Semana ${S.weeks.length + 1}`; c.startDate = nextStart(); delete c.updatedAt;
-      c.workouts = (c.workouts || []).map(x => ({ ...blankWo(), ...x, id: uid(), exercises: (x.exercises || []).map(ex => ({ ...blankEx(), ...ex, id: uid() })) }));
+      c.workouts = (c.workouts || []).map(x => ({ ...blankWo(), ...x, id: uid(), exercises: (x.exercises || []).map(ex => prepEx({ ...blankEx(), ...ex, id: uid() })) }));
       S.edit = { isNew: true, dirty: true, openWo: 0, draft: c }; toast('Copia lista. Ajusta lo que quieras y guarda.'); render(true); return window.scrollTo({ top: 0 }); }
     case 'delwk':
       if (S.armed !== armedKey) { S.armed = armedKey; return render(true); }
