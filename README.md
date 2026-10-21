@@ -4,7 +4,7 @@ Web sencilla para programar entrenamientos funcionales a distancia. Tiene dos p�
 
 | Página | Archivo | Para quién |
 |---|---|---|
-| Entrenos | `index.html` | Papá: ve la semana, hace los entrenos (con temporizador de descanso y HIIT) y envía cómo le ha ido. |
+| Entrenos | `index.html` | Papá: ve la semana, hace los entrenos (con temporizador de descanso y HIIT), apunta sus carreras (día, tiempo y distancia) y envía cómo le ha ido. |
 | Entrenador | `entrenador.html` | Tú: programas las semanas, subes fotos y vídeos de los ejercicios (o pegas un enlace de YouTube, Vimeo, Google Drive o de una imagen) y respondes al feedback. |
 
 No hay logins. Los datos se guardan en Supabase (proyecto **Entreno Papá**) y las dos páginas se actualizan solas.
@@ -30,7 +30,7 @@ Desde el móvil, abre cada enlace y usa **Añadir a pantalla de inicio** para te
 
 ## Base de datos (Supabase)
 
-- Tablas `weeks` (semanas), `feedback` (respuestas de Papá) y `library` (foto, vídeo y enlace de cada ejercicio, por nombre). Cada fila guarda un documento JSON en la columna `data`.
+- Tablas `weeks` (semanas), `feedback` (respuestas de Papá), `runs` (carreras planificadas o hechas, con tiempo y distancia) y `library` (foto, vídeo y enlace de cada ejercicio, por nombre). Cada fila guarda un documento JSON en la columna `data`.
 - Bucket público `media` para fotos y vídeos (máximo 20 MB por archivo).
 - Sin logins: cualquiera que tenga la dirección de la web puede leer y cambiar los datos. No compartas los enlaces fuera de la familia.
 

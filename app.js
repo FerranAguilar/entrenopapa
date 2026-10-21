@@ -97,7 +97,8 @@ const I = {
   edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   send: '<path d="M4 12l16-8-6 16-2.5-6.5z"/>',
-  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>'
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  run: '<circle cx="15" cy="4.5" r="2"/><path d="M13 8l-2.2 5 3.2 3-1 5M10.8 13l-3 4H5M8 10.5l5-2.5 3 3.2h3"/>'
 };
 const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n]}</svg>`;
 function face(n) {
@@ -134,7 +135,8 @@ const S = {
   weeks: [], feedback: {}, gotWeeks: false, gotFb: false,
   weekIdx: null, open: null, editFb: null,
   tab: 'plan', edit: null, armed: null,
-  assets: null, vidOpen: new Set(), uploading: null, lib: {}
+  assets: null, vidOpen: new Set(), uploading: null, lib: {},
+  runs: {}, runOpen: null, runDraft: null
 };
 const validAsset = id => /^[0-9a-f]{32}$/i.test(String(id || '')) ? String(id) : '';
 
@@ -476,6 +478,111 @@ function hiitSummary(cfg, n) {
   </div><p class="muted" style="font-size:15px">${n} ejercicio${n === 1 ? '' : 's'} por serie · duración total <b class="mono" style="color:var(--ink)">${fmtLong(total)}</b></p>`;
 }
 
+/* ================= RUNS ================= */
+/* A run is planned (done: false) or done, with time (durationSec) and distance (km). Stored in the runs table. */
+const parseKm = v => { const n = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null; };
+const fmtKm = n => n == null ? '' : Number(n).toLocaleString('es-ES', { maximumFractionDigits: 2 });
+const todayIso = () => isoD(new Date());
+const WDS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+const dayShort = s => { const d = parseD(s); return d ? `${WDS[(d.getDay() + 6) % 7]} ${d.getDate()}` : ''; };
+const fmtDayLong = s => { const d = parseD(s); if (!d) return ''; const t = d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'short' }).replace('.', ''); return t.charAt(0).toUpperCase() + t.slice(1); };
+function inWeekStart(start, dateStr) { const d = parseD(dateStr); if (!start || !d) return false; const e = new Date(start); e.setDate(e.getDate() + 7); return d >= start && d < e; }
+const inWeek = (w, dateStr) => inWeekStart(parseD(w && w.startDate), dateStr);
+const runsFrom = start => Object.values(S.runs).filter(r => inWeekStart(start, r.date)).sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.createdAt).localeCompare(String(b.createdAt)));
+const runPace = r => (r.durationSec > 0 && r.km > 0) ? fmtSec(Math.round(r.durationSec / r.km)) : '';
+const runHeadline = r => r.km ? `${fmtKm(r.km)} km${r.durationSec ? ` en ${fmtLong(r.durationSec)}` : ''}` : r.durationSec ? `${fmtLong(r.durationSec)} corriendo` : 'Carrera';
+function paceText(d) {
+  const n = v => { const k = parseInt(v, 10); return Number.isFinite(k) && k > 0 ? k : 0; };
+  const dur = n(d.h) * 3600 + n(d.m) * 60 + n(d.s), km = parseKm(d.km);
+  return dur && km ? `Ritmo: <b>${fmtSec(Math.round(dur / km))}</b> por km` : 'Pon tiempo y distancia y verás tu ritmo por kilómetro.';
+}
+function runCard(r) {
+  const past = String(r.date) <= todayIso();
+  const body = r.done
+    ? `<span class="rbig">${esc(runHeadline(r))}</span><span class="wmeta">${runPace(r) ? `<span>${ic('timer')}${runPace(r)} /km</span>` : ''}${r.feeling ? `<span>${esc(FEEL[r.feeling] || '')}</span>` : ''}</span>`
+    : `<span class="rbig">Voy a correr</span><span class="wmeta"><span>${past ? 'Toca para apuntar tiempo y distancia' : esc(r.comment || 'Planificada')}</span></span>`;
+  return `<button type="button" class="rcard ${r.done ? 'is-done' : 'planned'}" data-act="runopen" data-id="${esc(r.id)}">
+    <span class="rday"><small>${esc(WDS[(parseD(r.date).getDay() + 6) % 7])}</small><b>${parseD(r.date).getDate()}</b></span>
+    <span class="wbody">${body}${r.coachReply ? `<span><span class="chip reply">${ic('chat')}Tu entrenador te ha respondido</span></span>` : ''}</span>
+    <span class="wstate">${r.done ? ic('check') : ic('next')}</span>
+  </button>`;
+}
+function runSection(start) {
+  const list = runsFrom(start), km = list.filter(r => r.done).reduce((a, r) => a + (r.km || 0), 0);
+  return `<section class="runsec" aria-labelledby="runh">
+    <div class="headrow"><div><span class="eyebrow">${km ? `${fmtKm(km)} km esta semana` : 'Esta semana'}</span><h2 id="runh">Carreras</h2></div>
+      <button type="button" class="btn runbtn" data-act="runnew" ${S.canWrite ? '' : 'disabled'}>${ic('plus')}Añadir</button></div>
+    ${list.map(runCard).join('') || `<div class="empty"><span class="runicon">${ic('run')}</span><p class="muted">Apunta los días que vas a correr. Cuando vuelvas, pon el tiempo y la distancia.</p></div>`}
+  </section>`;
+}
+function runDraftFrom(r) {
+  const s = r.durationSec || 0;
+  return { id: r.id, date: r.date, done: !!r.done, h: s >= 3600 ? String(Math.floor(s / 3600)) : '', m: s ? String(Math.floor(s % 3600 / 60)) : '', s: s % 60 ? String(s % 60) : '', km: r.km ? fmtKm(r.km) : '', feeling: r.feeling || null, comment: r.comment || '' };
+}
+function defaultRunDate() {
+  const w = S.weeks[S.weekIdx], t = todayIso();
+  return !w || !parseD(w.startDate) || inWeek(w, t) ? t : w.startDate;
+}
+function renderRunForm(ro) {
+  const d = S.runDraft, prev = S.runs[d.id], armed = S.armed === 'run:' + d.id;
+  const num = (k, label, ph, max) => `<label class="f"><span>${label}</span><input class="inp" id="run-${k}" data-run="${k}" type="number" inputmode="numeric" min="0" max="${max}" value="${esc(d[k])}" placeholder="${ph}"></label>`;
+  const chat = prev && ((prev.done && prev.comment) || prev.coachReply) ? `<section class="fbcard"><div class="chat">
+      ${prev.done && prev.comment ? `<div class="bubble right"><span class="who">Tú</span>${esc(prev.comment)}</div>` : ''}
+      ${prev.coachReply ? `<div class="bubble left"><span class="who">Entrenador</span>${esc(prev.coachReply)}</div>` : ''}</div></section>` : '';
+  return { html: `<section class="dhead"><div class="wrap">
+      <button type="button" class="backbtn" data-act="runback">${ic('back')}Volver</button>
+      <div><div class="eyebrow">Carrera</div><h1>${prev ? esc(fmtDayLong(prev.date)) : 'Nueva carrera'}</h1></div>
+    </div></section>
+    <div class="wrap section stack">${ro}
+      <section class="fbcard">
+        <label class="f"><span>Día</span><input class="inp" type="date" id="run-date" data-run="date" value="${esc(d.date)}"></label>
+        <span class="lbl2">¿Ya has corrido?</span>
+        <div class="seg2">
+          <button type="button" data-act="rundone" data-v="1" aria-pressed="${!!d.done}">${ic('check')}Ya he corrido</button>
+          <button type="button" data-act="rundone" data-v="0" aria-pressed="${!d.done}">${ic('cal')}Voy a correr</button>
+        </div>
+        ${d.done ? `
+        <span class="lbl2">Tiempo</span>
+        <div class="durin">${num('h', 'Horas', '0', 24)}${num('m', 'Minutos', '30', 59)}${num('s', 'Segundos', '0', 59)}</div>
+        <span class="lbl2">Distancia</span>
+        <div class="kmrow"><input class="inp" id="run-km" data-run="km" type="text" inputmode="decimal" autocomplete="off" value="${esc(d.km)}" placeholder="5,0" aria-label="Distancia en kilómetros"><b>km</b></div>
+        <div class="kmchips">${[3, 5, 8, 10].map(k => `<button type="button" data-act="runkm" data-km="${k}">${k} km</button>`).join('')}</div>
+        <p class="pace" id="run-pace">${paceText(d)}</p>
+        <span class="lbl2">¿Cómo te has sentido?</span>
+        <div class="faces">${[1, 2, 3, 4, 5].map(n => `<button type="button" class="f${n}" data-act="runfeel" data-n="${n}" aria-pressed="${d.feeling === n}" aria-label="${FEEL[n]}">${face(n)}<small>${FEEL[n]}</small></button>`).join('')}</div>
+        <label class="f"><span>Comentario para tu entrenador (opcional)</span><textarea class="inp" id="run-comment" data-run="comment" rows="3" placeholder="Por dónde has ido, cómo te has notado…">${esc(d.comment)}</textarea></label>`
+        : `<p class="muted">Apunta el día. Cuando vuelvas de correr, entra aquí y pon el tiempo y la distancia.</p>
+        <label class="f"><span>Nota (opcional)</span><input class="inp" id="run-note" data-run="comment" value="${esc(d.comment)}" placeholder="Ej.: rodaje suave de 30 min"></label>`}
+        <button type="button" class="btn big runbtn" data-act="runsave" ${S.canWrite ? '' : 'disabled'}>${ic('check')}${d.done ? 'Guardar carrera' : 'Apuntar el día'}</button>
+        ${prev ? `<button type="button" class="btn ghost danger ${armed ? 'armed' : ''}" data-act="rundel" data-id="${esc(d.id)}" style="align-self:flex-start">${ic('trash')}${armed ? '¿Seguro? Borrar' : 'Borrar carrera'}</button>` : ''}
+      </section>
+      ${chat}
+    </div>` };
+}
+async function saveRun() {
+  const d = S.runDraft; if (!d) return;
+  if (!parseD(d.date)) { toast('Elige el día de la carrera.'); return; }
+  const n = v => { const k = parseInt(v, 10); return Number.isFinite(k) && k > 0 ? k : 0; };
+  const dur = d.done ? n(d.h) * 3600 + Math.min(59, n(d.m)) * 60 + Math.min(59, n(d.s)) : 0;
+  const km = d.done ? parseKm(d.km) : null;
+  if (d.done && !dur && !km) { toast('Apunta el tiempo o la distancia que has corrido.'); return; }
+  const prev = S.runs[d.id], now = new Date().toISOString();
+  const body = {
+    id: d.id, date: d.date, done: !!d.done, durationSec: dur || null, km: km || null,
+    feeling: d.done ? (d.feeling || null) : null, comment: String(d.comment || '').trim(),
+    createdAt: (prev && prev.createdAt) || now, updatedAt: now,
+    seen: !d.done, coachReply: (prev && prev.coachReply) || '', replyAt: (prev && prev.replyAt) || null
+  };
+  try {
+    await write('runs/' + d.id, ref => ref.set(body));
+    const wi = S.weeks.findIndex(w => inWeek(w, d.date)); if (wi >= 0) S.weekIdx = wi;
+    S.runOpen = null; S.runDraft = null; S.armed = null;
+    toast(d.done ? '¡Carrera guardada!' : `Apuntado: ${fmtDayLong(d.date).toLowerCase()} vas a correr.`);
+    render(true); window.scrollTo({ top: 0 });
+  } catch {}
+}
+function updatePace() { const el = document.getElementById('run-pace'); if (el && S.runDraft) el.innerHTML = paceText(S.runDraft); }
+
 /* ================= ATHLETE ================= */
 function ring(done, total) {
   const r = 30, c = 2 * Math.PI * r, p = total ? done / total : 0;
@@ -486,9 +593,11 @@ function ring(done, total) {
 }
 function renderAthlete() {
   const ro = !S.canWrite ? `<div class="banner">Puedes ver los entrenos, pero esta cuenta no puede enviar respuestas. Pide que te inviten a la página como editor.</div>` : '';
+  if (S.runOpen && S.runDraft) return renderRunForm(ro);
   if (!S.weeks.length) {
     return { html: `<section class="hero"><div class="wrap"><h1>Hola, Papá</h1></div></section>
-      <div class="wrap section stack">${ro}<div class="empty"><h2>Todavía no hay entrenos</h2><p class="muted">Tu entrenador está preparando la primera semana. Cuando la publique, aparecerá aquí.</p></div></div>` };
+      <div class="wrap section stack">${ro}<div class="empty"><h2>Todavía no hay entrenos</h2><p class="muted">Tu entrenador está preparando la primera semana. Cuando la publique, aparecerá aquí.</p></div>
+      ${runSection(mondayOf(new Date()))}</div>` };
   }
   if (S.weekIdx == null || S.weekIdx >= S.weeks.length) S.weekIdx = defaultWeekIdx();
   if (S.open && findWorkout(S.open)) return renderWorkout(S.open, ro);
@@ -499,12 +608,16 @@ function renderAthlete() {
 
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const start = parseD(w.startDate);
+  const weekRuns = start ? runsFrom(start) : [];
+  const weekKm = weekRuns.filter(r => r.done).reduce((a, r) => a + (r.km || 0), 0);
   const strip = DAYL.map((l, i) => {
     const these = wos.filter(x => dayIdx(x.day) === i);
     const has = these.length > 0, ok = has && these.every(x => S.feedback[x.id]);
     let isToday = false, num = '';
     if (start) { const d = new Date(start); d.setDate(d.getDate() + i); isToday = d.getTime() === today.getTime(); num = d.getDate(); }
-    return `<div class="dcell ${has ? 'has' : ''} ${ok ? 'done' : ''} ${isToday ? 'today' : ''}"><span class="lbl">${l}</span><span class="dot">${ok ? ic('check') : `<span class="mono">${num}</span>`}</span></div>`;
+    const dRuns = start ? weekRuns.filter(r => parseD(r.date).getTime() === new Date(start.getFullYear(), start.getMonth(), start.getDate() + i).getTime()) : [];
+    const rmk = `<span class="rmk ${dRuns.length ? 'has' : ''} ${dRuns.some(r => r.done) ? 'on' : ''}" ${dRuns.length ? `aria-label="${dRuns.some(r => r.done) ? 'Ha corrido' : 'Va a correr'}"` : 'aria-hidden="true"'}>${ic('run')}</span>`;
+    return `<div class="dcell ${has ? 'has' : ''} ${ok ? 'done' : ''} ${isToday ? 'today' : ''}"><span class="lbl">${l}</span><span class="dot">${ok ? ic('check') : `<span class="mono">${num}</span>`}</span>${rmk}</div>`;
   }).join('');
   const msg = total === 0 ? 'Semana sin entrenos' : done === total ? '¡Semana completada!' : done === 0 ? `${total} entreno${total === 1 ? '' : 's'} esta semana` : `Llevas ${done} de ${total}`;
 
@@ -529,10 +642,11 @@ function renderAthlete() {
         <div class="mid"><div class="eyebrow">${esc(weekRange(w.startDate) || `Semana ${S.weekIdx + 1} de ${S.weeks.length}`)}</div><h1>${esc(w.title || 'Semana')}</h1></div>
         <button type="button" class="arrow" data-act="wk" data-d="1" aria-label="Semana siguiente" ${S.weekIdx === S.weeks.length - 1 ? 'disabled' : ''}>${ic('next')}</button>
       </div>
-      <div class="hero-row">${ring(done, total)}<div class="txt"><span class="big">${msg}</span>${w.focus ? `<span class="focus">${esc(w.focus)}</span>` : ''}</div></div>
+      <div class="hero-row">${ring(done, total)}<div class="txt"><span class="big">${msg}</span>${weekKm ? `<span class="runsum">${ic('run')}${fmtKm(weekKm)} km corridos</span>` : ''}${w.focus ? `<span class="focus">${esc(w.focus)}</span>` : ''}</div></div>
       ${start ? `<div class="days" aria-label="Días de la semana">${strip}</div>` : ''}
     </div></section>
-    <div class="wrap section stack">${ro}${cards || `<p class="muted">Esta semana no tiene entrenos.</p>`}</div>` };
+    <div class="wrap section stack">${ro}${cards || `<p class="muted">Esta semana no tiene entrenos.</p>`}
+      ${start ? runSection(start) : ''}</div>` };
 }
 
 function getDraft(wid) {
@@ -710,7 +824,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$sheet.hi
 
 /* ================= COACH ================= */
 function renderCoach() {
-  const unseen = Object.values(S.feedback).filter(f => !f.seen).length;
+  const unseen = Object.values(S.feedback).filter(f => !f.seen).length + Object.values(S.runs).filter(r => r.done && !r.seen).length;
   const ro = !S.canWrite ? `<div class="banner">Esta cuenta solo puede ver. Para editar, abre la página con la cuenta del dueño o pide acceso de editor.</div>` : '';
   const tabbar = `<nav class="dock tabbar" aria-label="Secciones"><div class="wrap" role="tablist">
     <button type="button" role="tab" id="tab-plan" aria-selected="${S.tab === 'plan'}" data-act="tab" data-t="plan">${ic('cal')}Programación</button>
@@ -726,6 +840,9 @@ function renderCoach() {
         <button type="button" class="btn" data-act="editwk" data-id="${esc(w.id)}">${ic('edit')}Editar</button></div>
       <div class="wklist">${(w.workouts || []).map(x => `<span class="${S.feedback[x.id] ? 'ok' : ''}">${S.feedback[x.id] ? '✓ ' : ''}${esc(dayAbbr(x))} · ${esc(x.title || 'Entreno')}</span>`).join('')}</div>
       <div class="wkbar"><div class="bar"><i style="width:${total ? Math.round(done / total * 100) : 0}%"></i></div><span class="mono">${done}/${total}</span> hechos</div>
+      ${(() => { const rs = runsFrom(parseD(w.startDate)); if (!rs.length) return ''; const km = rs.filter(r => r.done).reduce((a, r) => a + (r.km || 0), 0);
+        return `<div class="wklist">${rs.map(r => `<span class="run ${r.done ? '' : 'plan'}">${ic('run')}${esc(dayShort(r.date))} · ${r.done ? esc(r.km ? fmtKm(r.km) + ' km' : fmtLong(r.durationSec)) : 'planificada'}</span>`).join('')}</div>
+        ${km ? `<span class="muted" style="font-size:14px">${rs.filter(r => r.done).length} carrera${rs.filter(r => r.done).length === 1 ? '' : 's'} · <b class="mono" style="color:var(--ink)">${fmtKm(km)} km</b></span>` : ''}`; })()}
       <div class="actions">
         <button type="button" class="btn ghost" data-act="dupwk" data-id="${esc(w.id)}">${ic('copy')}Duplicar</button>
         <button type="button" class="btn ghost danger ${armed ? 'armed' : ''}" data-act="delwk" data-id="${esc(w.id)}">${ic('trash')}${armed ? '¿Seguro? Eliminar' : 'Eliminar'}</button>
@@ -941,10 +1058,35 @@ async function uploadMedia(input) {
   } finally { S.uploading = null; render(true); }
 }
 
+function runInboxCard(r) {
+  const draft = ls.get('reply:run:' + r.id, '');
+  return `<article class="fbc ${r.seen ? '' : 'unseen'}">
+    <div class="fbc-head">${r.feeling ? face(r.feeling) : `<span class="runicon">${ic('run')}</span>`}<div style="min-width:0"><span class="eyebrow">Carrera · ${esc(fmtDayLong(r.date))}</span><h3>${esc(runHeadline(r))}</h3></div>${r.seen ? '' : '<span class="chip new">Nuevo</span>'}</div>
+    <div class="stats">
+      ${r.km ? `<span class="stat">${ic('run')}<b>${fmtKm(r.km)}</b>km</span>` : ''}
+      ${r.durationSec ? `<span class="stat">${ic('timer')}<b>${fmtLong(r.durationSec)}</b></span>` : ''}
+      ${runPace(r) ? `<span class="stat"><b>${runPace(r)}</b>/km</span>` : ''}
+      ${r.feeling ? `<span class="stat"><b>${FEEL[r.feeling]}</b></span>` : ''}
+    </div>
+    <div class="chat">
+      ${r.comment ? `<div class="bubble left"><span class="who">Papá</span>${esc(r.comment)}</div>` : ''}
+      ${r.coachReply ? `<div class="bubble right"><span class="who">Tú</span>${esc(r.coachReply)}</div>` : ''}
+    </div>
+    <div class="composer">
+      <textarea class="inp" rows="1" id="reply-run-${esc(r.id)}" data-reply="run:${esc(r.id)}" placeholder="${r.coachReply ? 'Cambiar tu respuesta…' : 'Responder a Papá…'}" aria-label="Respuesta">${esc(draft)}</textarea>
+      <button type="button" class="btn primary icon" data-act="runreply" data-id="${esc(r.id)}" aria-label="Enviar respuesta" ${S.canWrite ? '' : 'disabled'}>${ic('send')}</button>
+    </div>
+    ${r.seen ? '' : `<button type="button" class="btn ghost" data-act="runseen" data-id="${esc(r.id)}" style="align-self:flex-start" ${S.canWrite ? '' : 'disabled'}>${ic('check')}Marcar como leído</button>`}
+  </article>`;
+}
 function renderInbox() {
-  const list = Object.values(S.feedback).sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));
-  if (!list.length) return `<div class="empty"><h3>Sin feedback todavía</h3><p class="muted">Cuando Papá termine un entreno y lo envíe, verás aquí cómo le ha ido.</p></div>`;
-  return list.map(f => {
+  const items = [
+    ...Object.values(S.feedback).map(f => ({ t: String(f.submittedAt || ''), f })),
+    ...Object.values(S.runs).filter(r => r.done).map(r => ({ t: String(r.updatedAt || r.date || ''), r }))
+  ].sort((a, b) => b.t.localeCompare(a.t));
+  if (!items.length) return `<div class="empty"><h3>Sin feedback todavía</h3><p class="muted">Cuando Papá termine un entreno o apunte una carrera, verás aquí cómo le ha ido.</p></div>`;
+  return items.map(({ f, r }) => {
+    if (r) return runInboxCard(r);
     const exs = Object.values(f.exercises || {});
     const skipped = exs.filter(e => !e.done).map(e => e.name);
     const notes = exs.filter(e => e.note);
@@ -1007,6 +1149,7 @@ $app.addEventListener('input', e => {
   const t = e.target;
   if (t.dataset.bind && S.edit) return setBind(t.dataset.bind, t.value);
   if (t.dataset.reply) return ls.set('reply:' + t.dataset.reply, t.value);
+  if (t.dataset.run && S.runDraft) { S.runDraft[t.dataset.run] = t.value; if (t.dataset.run !== 'comment') updatePace(); return; }
   if (S.open && (t.dataset.fb || t.dataset.exnote)) {
     const d = getDraft(S.open);
     if (t.dataset.fb) d[t.dataset.fb] = t.value; else d.notes[t.dataset.exnote] = t.value;
@@ -1018,13 +1161,13 @@ async function onClick(e) {
   const b = e.target.closest('[data-act]'); if (!b || b.disabled) return;
   const act = b.dataset.act, id = b.dataset.id;
   const wi = b.dataset.w != null ? +b.dataset.w : null, ei = b.dataset.e != null ? +b.dataset.e : null;
-  const armedKey = act === 'delwk' ? 'wk:' + id : act === 'wodel' ? 'wo:' + wi : null;
+  const armedKey = act === 'delwk' ? 'wk:' + id : act === 'wodel' ? 'wo:' + wi : act === 'rundel' ? 'run:' + id : null;
   if (!armedKey) S.armed = null;
 
   switch (act) {
     /* athlete */
     case 'wk': S.weekIdx = Math.min(S.weeks.length - 1, Math.max(0, S.weekIdx + Number(b.dataset.d))); return render(true);
-    case 'open': S.open = id; S.editFb = null; render(true); return window.scrollTo({ top: 0 });
+    case 'open': S.open = id; S.editFb = null; S.runOpen = null; render(true); return window.scrollTo({ top: 0 });
     case 'back': S.open = null; S.editFb = null; render(true); return window.scrollTo({ top: 0 });
     case 'tick': {
       const d = getDraft(S.open); d.checks[id] = !d.checks[id]; saveDraft(S.open, d);
@@ -1055,6 +1198,31 @@ async function onClick(e) {
       if (opening) { const v = document.querySelector(`#ex-${CSS.escape(id)} video`); if (v) { v.muted = true; v.play().catch(() => {}); } }
       return;
     }
+    case 'runnew': {
+      const date = defaultRunDate();
+      S.runDraft = { id: uid(), date, done: date <= todayIso(), h: '', m: '', s: '', km: '', feeling: null, comment: '' };
+      S.runOpen = S.runDraft.id; render(true); return window.scrollTo({ top: 0 });
+    }
+    case 'runopen': { const r = S.runs[id]; if (!r) return; S.runDraft = runDraftFrom(r); S.runOpen = id; render(true); return window.scrollTo({ top: 0 }); }
+    case 'runback': S.runOpen = null; S.runDraft = null; render(true); return window.scrollTo({ top: 0 });
+    case 'rundone': if (S.runDraft) { S.runDraft.done = b.dataset.v === '1'; render(true); } return;
+    case 'runkm': if (S.runDraft) { S.runDraft.km = b.dataset.km; const k = document.getElementById('run-km'); if (k) k.value = b.dataset.km; updatePace(); } return;
+    case 'runfeel': if (S.runDraft) { S.runDraft.feeling = Number(b.dataset.n); b.parentElement.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b)); } return;
+    case 'runsave': return saveRun();
+    case 'rundel':
+      if (S.armed !== armedKey) { S.armed = armedKey; return render(true); }
+      S.armed = null;
+      try { await write('runs/' + id, ref => ref.delete()); S.runOpen = null; S.runDraft = null; toast('Carrera borrada.'); } catch {}
+      return render(true);
+    case 'runreply': {
+      const ta = document.getElementById('reply-run-' + id); const txt = (ta?.value || '').trim();
+      if (!txt) { toast('Escribe una respuesta antes de enviarla.'); return; }
+      try { await write('runs/' + id, ref => ref.update({ coachReply: txt, replyAt: new Date().toISOString(), seen: true })); ls.del('reply:run:' + id); toast('Respuesta enviada.'); render(true); } catch {}
+      return;
+    }
+    case 'runseen':
+      try { await write('runs/' + id, ref => ref.update({ seen: true })); render(true); } catch {}
+      return;
     case 'send': return sendFeedback(S.open);
     case 'editfb': S.editFb = S.open; ls.del('draft:' + S.open); return render(true);
     case 'cancelfb': S.editFb = null; ls.del('draft:' + S.open); return render(true);
@@ -1134,6 +1302,10 @@ async function boot() {
     const m = {}; snap.docs.forEach(d => { m[d.id] = { ...d.data(), workoutId: d.id }; });
     S.feedback = m; S.gotFb = true; render();
   }, err => { toast(errMsg(err)); });
+  db.collection('runs').onSnapshot(snap => {
+    const m = {}; snap.docs.forEach(d => { const r = d.data(); if (r && parseD(r.date)) m[d.id] = { ...r, id: d.id }; });
+    S.runs = m; render();
+  }, () => {});
 }
 boot();
 })();
