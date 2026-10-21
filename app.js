@@ -121,8 +121,6 @@ const fmtWhen = iso => { try { return new Date(iso).toLocaleString('es-ES', { we
 const DAYK = ['lun', 'mar', 'mie', 'jue', 'vie', 'sab', 'dom'];
 const DAYL = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
 const dayIdx = s => DAYK.indexOf(fold(s).slice(0, 3));
-function dayDate(week, x) { const d = parseD(week.startDate), i = dayIdx(x.day); if (!d || i < 0) return null; const r = new Date(d); r.setDate(r.getDate() + i); return r; }
-const dayAbbr = x => { const i = dayIdx(x.day); return i >= 0 ? ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'][i] : (x.day ? String(x.day).slice(0, 3) : 'Día'); };
 
 const FEEL = ['', 'Muy duro', 'Duro', 'Normal', 'Bien', 'Genial'];
 const RPE = ['', 'Muy suave', 'Muy suave', 'Suave', 'Suave', 'Moderado', 'Moderado', 'Duro', 'Duro', 'Muy duro', 'Máximo'];
@@ -133,7 +131,7 @@ const S = {
   mode: PAGE,
   status: 'loading', db: null, canWrite: true,
   weeks: [], feedback: {}, gotWeeks: false, gotFb: false,
-  weekIdx: null, open: null, editFb: null,
+  weekIdx: null, open: null, editFb: null, atab: 'week', histMonth: null, histDay: null,
   tab: 'plan', edit: null, armed: null,
   assets: null, vidOpen: new Set(), uploading: null, lib: {},
   runs: {}, runOpen: null, runDraft: null
@@ -583,6 +581,77 @@ async function saveRun() {
 }
 function updatePace() { const el = document.getElementById('run-pace'); if (el && S.runDraft) el.innerHTML = paceText(S.runDraft); }
 
+/* ================= HISTORY ================= */
+const localIso = iso => { const d = new Date(iso); return isNaN(d) ? '' : isoD(d); };
+/* The day a workout was done: first time it was sent (later edits keep it). */
+const woDoneDate = f => localIso(f.doneAt || f.submittedAt);
+function activity() {
+  const m = {}, at = k => m[k] || (m[k] = { wos: [], runs: [] });
+  Object.values(S.feedback).forEach(f => { const k = woDoneDate(f); if (k) at(k).wos.push(f); });
+  Object.values(S.runs).forEach(r => { if (parseD(r.date)) at(r.date).runs.push(r); });
+  return m;
+}
+function monthStats(y, mo, act) {
+  const days = new Date(y, mo + 1, 0).getDate(); let wos = 0, runs = 0, km = 0, active = 0;
+  for (let d = 1; d <= days; d++) {
+    const a = act[isoD(new Date(y, mo, d))]; if (!a) continue;
+    const dr = a.runs.filter(r => r.done);
+    wos += a.wos.length; runs += dr.length; km += dr.reduce((s, r) => s + (r.km || 0), 0);
+    if (a.wos.length || dr.length) active++;
+  }
+  return { wos, runs, km, active };
+}
+function histDetail(k, act, coach) {
+  const a = act[k] || { wos: [], runs: [] }, today = todayIso();
+  if (!a.wos.length && !a.runs.length) return `<p class="muted">${esc(fmtDayLong(k))}: ${k > today ? 'nada apuntado todavía.' : 'día de descanso.'}</p>`;
+  const wos = a.wos.map(f => {
+    const can = !coach && findWorkout(f.workoutId), tag = can ? 'button' : 'div';
+    return `<${tag} ${can ? `type="button" data-act="hopen" data-id="${esc(f.workoutId)}"` : ''} class="hitem">${face(f.feeling)}
+      <span class="wbody"><span class="h3">${esc(f.workoutTitle || 'Entreno')}</span>
+      <span class="wmeta"><span>${esc(FEEL[f.feeling] || '')}</span>${f.rpe ? `<span>Esfuerzo ${f.rpe}/10</span>` : ''}${f.minutes ? `<span>${ic('timer')}${f.minutes} min</span>` : ''}${f.weekTitle ? `<span>${esc(f.weekTitle)}</span>` : ''}</span></span>
+      ${can ? ic('next') : ''}</${tag}>`;
+  }).join('');
+  const runs = a.runs.map(r => {
+    const tag = coach ? 'div' : 'button';
+    return `<${tag} ${coach ? '' : `type="button" data-act="runopen" data-id="${esc(r.id)}"`} class="hitem ${r.done ? '' : 'planned'}"><span class="runicon">${ic('run')}</span>
+      <span class="wbody"><span class="h3">${esc(r.done ? runHeadline(r) : 'Carrera planificada')}</span>
+      <span class="wmeta">${runPace(r) ? `<span>${runPace(r)} /km</span>` : ''}${r.feeling ? `<span>${esc(FEEL[r.feeling])}</span>` : ''}${!r.done && r.comment ? `<span>${esc(r.comment)}</span>` : ''}</span></span>
+      ${coach ? '' : ic('next')}</${tag}>`;
+  }).join('');
+  return `<span class="eyebrow">${esc(fmtDayLong(k))}</span>${wos}${runs}`;
+}
+function historyCalendar(coach) {
+  const now = new Date();
+  if (!S.histMonth) S.histMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const m0 = S.histMonth, y = m0.getFullYear(), mo = m0.getMonth(), act = activity(), today = todayIso();
+  const days = new Date(y, mo + 1, 0).getDate(), lead = (m0.getDay() + 6) % 7;
+  let cells = '';
+  for (let i = 0; i < lead; i++) cells += '<span aria-hidden="true"></span>';
+  for (let d = 1; d <= days; d++) {
+    const k = isoD(new Date(y, mo, d)), a = act[k] || { wos: [], runs: [] };
+    const dr = a.runs.filter(r => r.done), pr = a.runs.filter(r => !r.done), did = a.wos.length || dr.length;
+    const say = [a.wos.length && `${a.wos.length} entreno${a.wos.length > 1 ? 's' : ''}`, dr.length && `${dr.length} carrera${dr.length > 1 ? 's' : ''}`, pr.length && 'carrera planificada'].filter(Boolean).join(', ');
+    cells += `<button type="button" class="cal-d ${did ? 'did' : ''} ${k === today ? 'today' : ''} ${S.histDay === k ? 'sel' : ''} ${k > today ? 'future' : ''}" data-act="hday" data-d="${k}" aria-label="${d}${say ? ': ' + say : ''}" aria-pressed="${S.histDay === k}">
+      <span class="n">${d}</span><span class="mk">${a.wos.length ? `<i class="wo">${ic('weight')}</i>` : ''}${dr.length ? `<i class="ru">${ic('run')}</i>` : pr.length ? `<i class="ru plan">${ic('run')}</i>` : ''}</span></button>`;
+  }
+  const title = (t => t.charAt(0).toUpperCase() + t.slice(1))(m0.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }));
+  const sel = S.histDay && S.histDay.slice(0, 7) === isoD(m0).slice(0, 7) ? S.histDay : (today.slice(0, 7) === isoD(m0).slice(0, 7) ? today : null);
+  return {
+    stats: monthStats(y, mo, act),
+    html: `<section class="calcard" aria-label="Calendario">
+      <div class="cal-nav"><button type="button" data-act="hmon" data-d="-1" aria-label="Mes anterior">${ic('back')}</button><h3>${esc(title)}</h3><button type="button" data-act="hmon" data-d="1" aria-label="Mes siguiente">${ic('next')}</button></div>
+      <div class="cal-grid">${DAYL.map(l => `<span class="cal-h">${l}</span>`).join('')}${cells}</div>
+      <div class="cal-legend"><span><i class="wo">${ic('weight')}</i>Entreno</span><span><i class="ru">${ic('run')}</i>Carrera</span><span><i class="ru plan">${ic('run')}</i>Planificada</span></div>
+    </section>
+    <section class="stack" aria-live="polite">${sel ? histDetail(sel, act, coach) : `<p class="muted">Toca un día para ver lo que ${coach ? 'hizo' : 'hiciste'}.</p>`}</section>`
+  };
+}
+const statText = s => [`<span><b>${s.active}</b>día${s.active === 1 ? '' : 's'} activo${s.active === 1 ? '' : 's'}</span>`, `<span><b>${s.wos}</b>entreno${s.wos === 1 ? '' : 's'}</span>`, `<span><b>${s.runs}</b>carrera${s.runs === 1 ? '' : 's'}</span>`, s.km ? `<span><b>${fmtKm(s.km)}</b>km</span>` : ''].join('');
+const athTabs = () => `<nav class="dock tabbar" aria-label="Secciones"><div class="wrap" role="tablist">
+  <button type="button" role="tab" id="atab-week" aria-selected="${S.atab !== 'hist'}" data-act="atab" data-t="week">${ic('list')}Entrenos</button>
+  <button type="button" role="tab" id="atab-hist" aria-selected="${S.atab === 'hist'}" data-act="atab" data-t="hist">${ic('cal')}Historial</button>
+</div></nav>`;
+
 /* ================= ATHLETE ================= */
 function ring(done, total) {
   const r = 30, c = 2 * Math.PI * r, p = total ? done / total : 0;
@@ -594,10 +663,19 @@ function ring(done, total) {
 function renderAthlete() {
   const ro = !S.canWrite ? `<div class="banner">Puedes ver los entrenos, pero esta cuenta no puede enviar respuestas. Pide que te inviten a la página como editor.</div>` : '';
   if (S.runOpen && S.runDraft) return renderRunForm(ro);
+  if (S.open && findWorkout(S.open)) return renderWorkout(S.open, ro);
+  if (S.atab === 'hist') {
+    const h = historyCalendar(false);
+    return { dock: athTabs(), html: `<section class="hero"><div class="wrap">
+        <div><div class="eyebrow">Historial</div><h1>Lo que has hecho</h1></div>
+        <div class="hstats">${statText(h.stats)}</div>
+      </div></section>
+      <div class="wrap section stack">${ro}${h.html}</div>` };
+  }
   if (!S.weeks.length) {
     return { html: `<section class="hero"><div class="wrap"><h1>Hola, Papá</h1></div></section>
       <div class="wrap section stack">${ro}<div class="empty"><h2>Todavía no hay entrenos</h2><p class="muted">Tu entrenador está preparando la primera semana. Cuando la publique, aparecerá aquí.</p></div>
-      ${runSection(mondayOf(new Date()))}</div>` };
+      ${runSection(mondayOf(new Date()))}</div>`, dock: athTabs() };
   }
   if (S.weekIdx == null || S.weekIdx >= S.weeks.length) S.weekIdx = defaultWeekIdx();
   if (S.open && findWorkout(S.open)) return renderWorkout(S.open, ro);
@@ -610,9 +688,9 @@ function renderAthlete() {
   const start = parseD(w.startDate);
   const weekRuns = start ? runsFrom(start) : [];
   const weekKm = weekRuns.filter(r => r.done).reduce((a, r) => a + (r.km || 0), 0);
+  const act = activity();
   const strip = DAYL.map((l, i) => {
-    const these = wos.filter(x => dayIdx(x.day) === i);
-    const has = these.length > 0, ok = has && these.every(x => S.feedback[x.id]);
+    const has = false, ok = !!(start && (act[isoD(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i))] || { wos: [] }).wos.length);
     let isToday = false, num = '';
     if (start) { const d = new Date(start); d.setDate(d.getDate() + i); isToday = d.getTime() === today.getTime(); num = d.getDate(); }
     const dRuns = start ? weekRuns.filter(r => parseD(r.date).getTime() === new Date(start.getFullYear(), start.getMonth(), start.getDate() + i).getTime()) : [];
@@ -621,14 +699,15 @@ function renderAthlete() {
   }).join('');
   const msg = total === 0 ? 'Semana sin entrenos' : done === total ? '¡Semana completada!' : done === 0 ? `${total} entreno${total === 1 ? '' : 's'} esta semana` : `Llevas ${done} de ${total}`;
 
-  const cards = wos.map(x => {
+  const nextId = (wos.find(x => !S.feedback[x.id]) || {}).id;
+  const cards = wos.map((x, oi) => {
     const fb = S.feedback[x.id];
     const n = (x.exercises || []).filter(e => e.name).length;
-    const dd = dayDate(w, x);
     const vids = (x.exercises || []).filter(e => e.name && cardVideo(e)).length;
     return `<button type="button" class="wcard ${fb ? 'is-done' : ''}" data-act="open" data-id="${esc(x.id)}">
-      <span class="wday"><small>${esc(dayAbbr(x))}</small><b>${dd ? dd.getDate() : ic('cal')}</b></span>
-      <span class="wbody"><span class="h3">${esc(x.title || 'Entreno')}</span>
+      <span class="wday"><small>Nº</small><b>${oi + 1}</b></span>
+      <span class="wbody">${x.id === nextId ? `<span><span class="chip next">${ic('play')}Siguiente</span></span>` : ''}<span class="h3">${esc(x.title || 'Entreno')}</span>
+        ${fb ? `<span class="wmeta"><span>${ic('check')}Hecho el ${esc(dayShort(woDoneDate(fb)).toLowerCase())}</span></span>` : ''}
         <span class="wmeta">${hiitCfg(x).on ? `<span class="hiit-tag">${ic('flame')}HIIT · ${fmtLong(planTotal(hiitPlan(hiitCfg(x), n)))}</span>` : ''}<span>${ic('list')}${n} ejercicio${n === 1 ? '' : 's'}</span>${vids ? `<span>${ic('play')}${vids} vídeo${vids === 1 ? '' : 's'}</span>` : ''}${x.format ? `<span>${ic('repeat')}${esc(x.format.split(/[·,]/)[0].trim())}</span>` : ''}</span>
         ${fb && fb.coachReply ? `<span><span class="chip reply">${ic('chat')}Tu entrenador te ha respondido</span></span>` : ''}
       </span>
@@ -646,7 +725,7 @@ function renderAthlete() {
       ${start ? `<div class="days" aria-label="Días de la semana">${strip}</div>` : ''}
     </div></section>
     <div class="wrap section stack">${ro}${cards || `<p class="muted">Esta semana no tiene entrenos.</p>`}
-      ${start ? runSection(start) : ''}</div>` };
+      ${start ? runSection(start) : ''}</div>`, dock: athTabs() };
 }
 
 function getDraft(wid) {
@@ -739,7 +818,7 @@ function renderWorkout(wid, ro) {
 
   return { dock, html: `<section class="dhead"><div class="wrap">
       <button type="button" class="backbtn" data-act="back">${ic('back')}${esc(week.title || 'Semana')}</button>
-      <div><div class="eyebrow">${esc(x.day || 'Entreno')}</div><h1>${esc(x.title || 'Entreno')}</h1></div>
+      <div><div class="eyebrow">Entreno ${(week.workouts || []).indexOf(x) + 1} de ${(week.workouts || []).length}</div><h1>${esc(x.title || 'Entreno')}</h1></div>
       ${x.format ? `<span class="fmt">${ic('repeat')}${esc(x.format)}</span>` : ''}
       <div class="hbar"><div class="bar"><i id="ab-bar" style="width:${exs.length ? Math.round(checkedN / exs.length * 100) : 0}%"></i></div><span class="mono" id="ab-count2">${checkedN}/${exs.length}</span></div>
     </div></section>
@@ -772,8 +851,8 @@ async function sendFeedback(wid) {
   const prev = S.feedback[wid];
   const mins = parseInt(d.minutes, 10);
   const body = {
-    weekId: week.id, weekTitle: week.title || '', workoutId: wid, workoutTitle: workout.title || '', day: workout.day || '',
-    submittedAt: new Date().toISOString(), feeling: d.feeling, rpe: d.rpe || null, minutes: Number.isFinite(mins) && mins > 0 ? mins : null,
+    weekId: week.id, weekTitle: week.title || '', workoutId: wid, workoutTitle: workout.title || '',
+    submittedAt: new Date().toISOString(), doneAt: (prev && (prev.doneAt || prev.submittedAt)) || new Date().toISOString(), feeling: d.feeling, rpe: d.rpe || null, minutes: Number.isFinite(mins) && mins > 0 ? mins : null,
     comment: (d.comment || '').trim(),
     exercises: Object.fromEntries((workout.exercises || []).filter(e => e.name).map(e => [e.id, { name: e.name, done: !!d.checks[e.id], note: (d.notes[e.id] || '').trim() }])),
     seen: false, coachReply: (prev && prev.coachReply) || '', replyAt: (prev && prev.replyAt) || null
@@ -827,9 +906,11 @@ function renderCoach() {
   const unseen = Object.values(S.feedback).filter(f => !f.seen).length + Object.values(S.runs).filter(r => r.done && !r.seen).length;
   const ro = !S.canWrite ? `<div class="banner">Esta cuenta solo puede ver. Para editar, abre la página con la cuenta del dueño o pide acceso de editor.</div>` : '';
   const tabbar = `<nav class="dock tabbar" aria-label="Secciones"><div class="wrap" role="tablist">
-    <button type="button" role="tab" id="tab-plan" aria-selected="${S.tab === 'plan'}" data-act="tab" data-t="plan">${ic('cal')}Programación</button>
+    <button type="button" role="tab" id="tab-plan" aria-selected="${S.tab === 'plan'}" data-act="tab" data-t="plan">${ic('list')}Programación</button>
     <button type="button" role="tab" id="tab-fb" aria-selected="${S.tab === 'fb'}" data-act="tab" data-t="fb">${ic('chat')}Feedback${unseen ? `<span class="badge">${unseen}</span>` : ''}</button>
+    <button type="button" role="tab" id="tab-hist" aria-selected="${S.tab === 'hist'}" data-act="tab" data-t="hist">${ic('cal')}Historial</button>
   </div></nav>`;
+  if (S.tab === 'hist') { const h = historyCalendar(true); return { dock: tabbar, html: `<div class="wrap section stack">${ro}<div><span class="eyebrow">Historial</span><h2>Lo que ha hecho Papá</h2></div><div class="stats hsum">${statText(h.stats)}</div>${h.html}</div>` }; }
   if (S.tab === 'fb') return { html: `<div class="wrap section stack">${ro}<div><span class="eyebrow">${unseen ? `${unseen} sin leer` : 'Todo leído'}</span><h2>Feedback de Papá</h2></div>${renderInbox()}</div>`, dock: tabbar };
   if (S.edit) return renderEditor(ro);
   const cards = S.weeks.map((w, i) => {
@@ -838,7 +919,7 @@ function renderCoach() {
     return `<article class="wkcard">
       <div class="top2"><div><span class="eyebrow">${esc(weekRange(w.startDate) || 'Sin fecha')}</span><h3>${esc(w.title || 'Semana ' + (i + 1))}</h3></div>
         <button type="button" class="btn" data-act="editwk" data-id="${esc(w.id)}">${ic('edit')}Editar</button></div>
-      <div class="wklist">${(w.workouts || []).map(x => `<span class="${S.feedback[x.id] ? 'ok' : ''}">${S.feedback[x.id] ? '✓ ' : ''}${esc(dayAbbr(x))} · ${esc(x.title || 'Entreno')}</span>`).join('')}</div>
+      <div class="wklist">${(w.workouts || []).map(x => `<span class="${S.feedback[x.id] ? 'ok' : ''}">${S.feedback[x.id] ? '✓ ' : ''}${(w.workouts || []).indexOf(x) + 1}. ${esc(x.title || 'Entreno')}</span>`).join('')}</div>
       <div class="wkbar"><div class="bar"><i style="width:${total ? Math.round(done / total * 100) : 0}%"></i></div><span class="mono">${done}/${total}</span> hechos</div>
       ${(() => { const rs = runsFrom(parseD(w.startDate)); if (!rs.length) return ''; const km = rs.filter(r => r.done).reduce((a, r) => a + (r.km || 0), 0);
         return `<div class="wklist">${rs.map(r => `<span class="run ${r.done ? '' : 'plan'}">${ic('run')}${esc(dayShort(r.date))} · ${r.done ? esc(r.km ? fmtKm(r.km) + ' km' : fmtLong(r.durationSec)) : 'planificada'}</span>`).join('')}</div>
@@ -903,7 +984,7 @@ function renderEditor(ro) {
     const fb = S.feedback[x.id], isOpen = S.edit.openWo === wi, armed = S.armed === 'wo:' + wi;
     const nEx = x.exercises.filter(e => e.name).length;
     const head = `<button type="button" class="acc-head" data-act="wotoggle" data-w="${wi}" aria-expanded="${isOpen}">
-      <span class="wday"><small>${esc(dayAbbr(x))}</small><b>${wi + 1}</b></span>
+      <span class="wday"><small>Nº</small><b>${wi + 1}</b></span>
       <span class="wbody"><span class="h3">${esc(x.title || 'Entreno sin título')}</span><span class="wmeta"><span>${nEx} ejercicio${nEx === 1 ? '' : 's'}</span>${fb ? '<span class="chip done">Hecho</span>' : ''}</span></span>
       ${ic('next', 'chev')}</button>`;
     if (!isOpen) return `<section class="acc">${head}</section>`;
@@ -926,10 +1007,7 @@ function renderEditor(ro) {
       </div>`;
     }).join('');
     return `<section class="acc open">${head}<div class="acc-body">
-      <div class="grid2">
-        <label class="f"><span>Día</span><input class="inp" id="f-${w('day')}" data-bind="${w('day')}" value="${esc(x.day)}" placeholder="Lunes"></label>
-        <label class="f"><span>Título</span><input class="inp" id="f-${w('title')}" data-bind="${w('title')}" value="${esc(x.title)}" placeholder="Fuerza tren inferior"></label>
-      </div>
+      <label class="f"><span>Título</span><input class="inp" id="f-${w('title')}" data-bind="${w('title')}" value="${esc(x.title)}" placeholder="Fuerza tren inferior"></label>
       ${hiitEditor(x, wi)}
       <label class="f"><span>Formato (opcional)</span><input class="inp" id="f-${w('format')}" data-bind="${w('format')}" value="${esc(x.format)}" placeholder="Circuito · 3 vueltas, 90 s entre vueltas"></label>
       <label class="f"><span>Calentamiento (opcional)</span><textarea class="inp" rows="2" id="f-${w('warmup')}" data-bind="${w('warmup')}" placeholder="5 min caminando + movilidad de cadera y hombros">${esc(x.warmup)}</textarea></label>
@@ -952,6 +1030,7 @@ function renderEditor(ro) {
       <label class="f"><span>Nombre de la semana</span><input class="inp" id="f-wk-title" data-bind="wk:title" value="${esc(d.title)}" placeholder="Semana 1 · Adaptación"></label>
     </div>
     <label class="f"><span>Mensaje de la semana (opcional)</span><textarea class="inp" rows="2" id="f-wk-focus" data-bind="wk:focus" placeholder="Esta semana vamos suave para coger técnica.">${esc(d.focus)}</textarea></label>
+    <p class="muted" style="font-size:15px">Papá ve los entrenos en este orden y los hace cuando le viene bien. Usa ↑ ↓ para cambiar el orden.</p>
     ${wos}
     <button type="button" class="btn" data-act="woadd">${ic('plus')}Añadir entreno</button>
     <datalist id="exlib">${Object.values(S.lib).map(l => `<option value="${esc(l.name)}"></option>`).join('')}</datalist>
@@ -980,7 +1059,7 @@ async function saveWeek() {
   d.title = t(d.title); d.focus = t(d.focus); d.startDate = t(d.startDate);
   delete d.openWo;
   d.workouts = d.workouts.map(x => ({
-    id: x.id, day: t(x.day), title: t(x.title), format: t(x.format), warmup: t(x.warmup), notes: t(x.notes),
+    id: x.id, title: t(x.title), format: t(x.format), warmup: t(x.warmup), notes: t(x.notes),
     hiit: x.hiit && x.hiit.on ? hiitCfg(x) : null,
     exercises: x.exercises.map(e => ({ id: e.id, name: t(e.name), sets: t(e.sets), reps: t(e.reps), load: t(e.load), rest: t(e.rest), notes: t(e.notes), video: normUrl(e.video), videoAsset: validAsset(e.videoAsset), imageAsset: validAsset(e.imageAsset), _had: e._had || '' })).filter(e => e.name)
   })).filter(x => x.title || x.exercises.length);
@@ -1229,9 +1308,13 @@ async function onClick(e) {
 
     /* coach */
     case 'tab': S.tab = b.dataset.t; render(true); return window.scrollTo({ top: 0 });
+    case 'atab': S.atab = b.dataset.t; S.open = null; S.runOpen = null; S.runDraft = null; render(true); return window.scrollTo({ top: 0 });
+    case 'hday': S.histDay = b.dataset.d; return render(true);
+    case 'hmon': { const m = S.histMonth || new Date(); S.histMonth = new Date(m.getFullYear(), m.getMonth() + Number(b.dataset.d), 1); S.histDay = null; return render(true); }
+    case 'hopen': { const f = findWorkout(id); if (!f) return; S.weekIdx = S.weeks.indexOf(f.week); S.open = id; S.editFb = null; render(true); return window.scrollTo({ top: 0 }); }
     case 'newwk': {
       const n = S.weeks.length + 1;
-      S.edit = { isNew: true, dirty: true, openWo: 0, draft: { id: uid(), order: nextOrder(), title: `Semana ${n}`, startDate: nextStart(), focus: '', workouts: [blankWo('Lunes'), blankWo('Miércoles'), blankWo('Viernes')] } };
+      S.edit = { isNew: true, dirty: true, openWo: 0, draft: { id: uid(), order: nextOrder(), title: `Semana ${n}`, startDate: nextStart(), focus: '', workouts: [blankWo(), blankWo(), blankWo()] } };
       render(true); return window.scrollTo({ top: 0 });
     }
     case 'editwk': { const w = S.weeks.find(x => x.id === id); if (!w) return;

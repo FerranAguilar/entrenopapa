@@ -4,7 +4,7 @@ Web sencilla para programar entrenamientos funcionales a distancia. Tiene dos p�
 
 | Página | Archivo | Para quién |
 |---|---|---|
-| Entrenos | `index.html` | Papá: ve la semana, hace los entrenos (con temporizador de descanso y HIIT), apunta sus carreras (día, tiempo y distancia) y envía cómo le ha ido. |
+| Entrenos | `index.html` | Papá: ve la lista ordenada de entrenos de la semana y los hace cuando le viene bien (con temporizador de descanso y HIIT), apunta sus carreras (día, tiempo y distancia), envía cómo le ha ido y consulta su historial en un calendario. |
 | Entrenador | `entrenador.html` | Tú: programas las semanas, subes fotos y vídeos de los ejercicios (o pegas un enlace de YouTube, Vimeo, Google Drive o de una imagen) y respondes al feedback. |
 
 No hay logins. Los datos se guardan en Supabase (proyecto **Entreno Papá**) y las dos páginas se actualizan solas.
