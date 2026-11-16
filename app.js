@@ -131,7 +131,7 @@ const S = {
   mode: PAGE,
   status: 'loading', db: null, canWrite: true,
   weeks: [], feedback: {}, gotWeeks: false, gotFb: false,
-  weekIdx: null, open: null, editFb: null, atab: 'week', histMonth: null, histDay: null,
+  weekIdx: null, open: null, editFb: null, atab: 'home', histMonth: null, histDay: null,
   tab: 'plan', edit: null, armed: null,
   assets: null, vidOpen: new Set(), uploading: null, lib: {},
   runs: {}, runOpen: null, runDraft: null, planOff: false
@@ -749,10 +749,30 @@ function historyCalendar(coach) {
   };
 }
 const statText = s => [`<span><b>${s.active}</b>día${s.active === 1 ? '' : 's'} activo${s.active === 1 ? '' : 's'}</span>`, `<span><b>${s.wos}</b>entreno${s.wos === 1 ? '' : 's'}</span>`, `<span><b>${s.runs}</b>carrera${s.runs === 1 ? '' : 's'}</span>`, s.km ? `<span><b>${fmtKm(s.km)}</b>km</span>` : ''].join('');
-const athTabs = () => `<nav class="dock tabbar" aria-label="Secciones"><div class="wrap" role="tablist">
-  <button type="button" role="tab" id="atab-week" aria-selected="${S.atab !== 'hist'}" data-act="atab" data-t="week">${ic('list')}Entrenos</button>
-  <button type="button" role="tab" id="atab-hist" aria-selected="${S.atab === 'hist'}" data-act="atab" data-t="hist">${ic('cal')}Historial</button>
-</div></nav>`;
+const athTabs = () => '';
+const homeBtn = () => `<button type="button" class="backbtn" data-act="home">${ic('back')}Inicio</button>`;
+/* Papá's start screen: four big choices. */
+function renderHome(ro) {
+  const wi = S.weeks.length ? defaultWeekIdx() : -1, w = wi >= 0 ? S.weeks[wi] : null;
+  const wos = w ? (w.workouts || []) : [], { done, total } = w ? weekDone(w) : { done: 0, total: 0 };
+  const next = wos.find(x => !S.feedback[x.id]);
+  const start = mondayOf(new Date()), runs = runsFrom(start).filter(r => r.done), km = runs.reduce((a, r) => a + (r.km || 0), 0);
+  const planned = runsFrom(start).find(r => !r.done && r.date <= todayIso());
+  const sub = !w || !total ? 'Tu entrenador todavía no ha puesto entrenos'
+    : next ? `Te toca: ${next.title || 'Entreno'}` : 'Has hecho todos los de esta semana';
+  const big = (act, cls, icon, title, text, attrs = '') => `<button type="button" class="hbtn ${cls}" data-act="${act}" ${attrs}>
+      <span class="hic">${ic(icon)}</span><span class="htxt"><b>${title}</b><small>${esc(text)}</small></span>${ic('next', 'chev')}</button>`;
+  return { html: `<section class="hero"><div class="wrap">
+      <h1>Hola, Papá</h1>
+      ${total ? `<div class="hero-row">${ring(done, total)}<div class="txt"><span class="big">${done === total ? '¡Semana completada!' : `Llevas ${done} de ${total} entrenos esta semana`}</span>${km ? `<span class="runsum">${ic('run')}${fmtKm(km)} km corridos</span>` : ''}</div></div>` : ''}
+    </div></section>
+    <div class="wrap section stack">${ro}
+      ${big('hstart', 'main', next || !total ? 'play' : 'check', 'Empezar entrenamiento', sub, next ? `data-id="${esc(next.id)}"` : '')}
+      ${big(planned ? 'runopen' : 'runnew', 'run', 'run', 'Apuntar una carrera', planned ? 'Tienes una carrera planificada: apunta cómo ha ido' : 'Tiempo y distancia de lo que has corrido', planned ? `data-id="${esc(planned.id)}"` : '')}
+      ${big('goto', '', 'cal', 'Historial', 'Los días que has entrenado y corrido', 'data-t="hist"')}
+      ${big('goto', '', 'list', 'Programación semanal', w ? (w.title || 'Los entrenos de la semana') : 'Los entrenos de la semana', 'data-t="week"')}
+    </div>` };
+}
 
 /* ================= ATHLETE ================= */
 function ring(done, total) {
@@ -766,16 +786,18 @@ function renderAthlete() {
   const ro = !S.canWrite ? `<div class="banner">Puedes ver los entrenos, pero esta cuenta no puede enviar respuestas. Pide que te inviten a la página como editor.</div>` : '';
   if (S.runOpen && S.runDraft) return renderRunForm(ro);
   if (S.open && findWorkout(S.open)) return renderWorkout(S.open, ro);
+  if (S.atab !== 'hist' && S.atab !== 'week') return renderHome(ro);
   if (S.atab === 'hist') {
     const h = historyCalendar(false);
     return { dock: athTabs(), html: `<section class="hero"><div class="wrap">
+        ${homeBtn()}
         <div><div class="eyebrow">Historial</div><h1>Lo que has hecho</h1></div>
         <div class="hstats">${statText(h.stats)}</div>
       </div></section>
       <div class="wrap section stack">${ro}${h.html}</div>` };
   }
   if (!S.weeks.length) {
-    return { html: `<section class="hero"><div class="wrap"><h1>Hola, Papá</h1></div></section>
+    return { html: `<section class="hero"><div class="wrap">${homeBtn()}<h1>Programación</h1></div></section>
       <div class="wrap section stack">${ro}<div class="empty"><h2>Todavía no hay entrenos</h2><p class="muted">Tu entrenador está preparando la primera semana. Cuando la publique, aparecerá aquí.</p></div>
       ${runSection(mondayOf(new Date()))}</div>`, dock: athTabs() };
   }
@@ -818,6 +840,7 @@ function renderAthlete() {
   }).join('');
 
   return { html: `<section class="hero"><div class="wrap">
+      ${homeBtn()}
       <div class="weeknav">
         <button type="button" class="arrow" data-act="wk" data-d="-1" aria-label="Semana anterior" ${S.weekIdx === 0 ? 'disabled' : ''}>${ic('back')}</button>
         <div class="mid"><div class="eyebrow">${esc(weekRange(w.startDate) || `Semana ${S.weekIdx + 1} de ${S.weeks.length}`)}</div><h1>${esc(w.title || 'Semana')}</h1></div>
@@ -920,7 +943,7 @@ function renderWorkout(wid, ro) {
   }
 
   return { dock, html: `<section class="dhead"><div class="wrap">
-      <button type="button" class="backbtn" data-act="back">${ic('back')}${esc(week.title || 'Semana')}</button>
+      <button type="button" class="backbtn" data-act="back">${ic('back')}Volver</button>
       <div><div class="eyebrow">Entreno ${(week.workouts || []).indexOf(x) + 1} de ${(week.workouts || []).length}</div><h1>${esc(x.title || 'Entreno')}</h1></div>
       ${x.format ? `<span class="fmt">${ic('repeat')}${esc(x.format)}</span>` : ''}
       <div class="hbar"><div class="bar"><i id="ab-bar" style="width:${exs.length ? Math.round(checkedN / exs.length * 100) : 0}%"></i></div><span class="mono" id="ab-count2">${checkedN}/${exs.length}</span></div>
@@ -1391,7 +1414,8 @@ async function onClick(e) {
       return;
     }
     case 'runnew': {
-      const date = defaultRunDate();
+      if (S.atab === 'home') S.weekIdx = S.weeks.length ? defaultWeekIdx() : null;
+      const date = S.atab === 'home' ? todayIso() : defaultRunDate();
       S.runDraft = { id: uid(), date, done: date <= todayIso(), h: '', m: '', s: '', km: '', feeling: null, comment: '' };
       S.runOpen = S.runDraft.id; render(true); return window.scrollTo({ top: 0 });
     }
@@ -1421,6 +1445,12 @@ async function onClick(e) {
 
     /* coach */
     case 'tab': S.tab = b.dataset.t; render(true); return window.scrollTo({ top: 0 });
+    case 'home': S.atab = 'home'; S.open = null; S.runOpen = null; S.runDraft = null; render(true); return window.scrollTo({ top: 0 });
+    case 'goto': S.atab = b.dataset.t; if (S.atab === 'week') S.weekIdx = defaultWeekIdx(); render(true); return window.scrollTo({ top: 0 });
+    case 'hstart':
+      S.weekIdx = S.weeks.length ? defaultWeekIdx() : null;
+      if (id && findWorkout(id)) { S.open = id; S.editFb = null; } else S.atab = 'week';
+      render(true); return window.scrollTo({ top: 0 });
     case 'atab': S.atab = b.dataset.t; S.open = null; S.runOpen = null; S.runDraft = null; render(true); return window.scrollTo({ top: 0 });
     case 'hday': S.histDay = b.dataset.d; return render(true);
     case 'hmon': { const m = S.histMonth || new Date(); S.histMonth = new Date(m.getFullYear(), m.getMonth() + Number(b.dataset.d), 1); S.histDay = null; return render(true); }
