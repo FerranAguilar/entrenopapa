@@ -134,7 +134,7 @@ const S = {
   weekIdx: null, open: null, editFb: null, atab: 'week', histMonth: null, histDay: null,
   tab: 'plan', edit: null, armed: null,
   assets: null, vidOpen: new Set(), uploading: null, lib: {},
-  runs: {}, runOpen: null, runDraft: null
+  runs: {}, runOpen: null, runDraft: null, planOff: false
 };
 const validAsset = id => /^[0-9a-f]{32}$/i.test(String(id || '')) ? String(id) : '';
 
@@ -581,6 +581,108 @@ async function saveRun() {
 }
 function updatePace() { const el = document.getElementById('run-pace'); if (el && S.runDraft) el.innerHTML = paceText(S.runDraft); }
 
+/* ================= AUTO PLAN: weekly progression from the effort (RPE) Papá reports ================= */
+/* Rule per workout: RPE 1-6 -> a bit more; 7-8 -> same; 9-10 -> a bit less; not done or no RPE -> same.
+   The current week is fixed when it starts (from last week's feedback) and a provisional copy is added for the week after. */
+const repParts = r => { const m = String(r ?? '').trim().match(/^(\d+)(.*)$/); return m ? { n: +m[1], suf: m[2] } : null; };
+function ensureProg(e) {
+  const p = repParts(e.reps); if (!p) return null;
+  const secs = /^\s*(s|seg)/i.test(p.suf), step = secs ? 5 : 1, sets = parseInt(e.sets, 10) || 0;
+  const g = e.prog && Number.isFinite(+e.prog.min) && Number.isFinite(+e.prog.max) ? { min: +e.prog.min, max: +e.prog.max, step: +e.prog.step || step, maxSets: +e.prog.maxSets || Math.max(sets, 3) }
+    : { min: p.n, max: p.n + 4 * step, step, maxSets: Math.max(sets, 3) };
+  if (p.n > g.max) g.max = p.n + 2 * g.step;
+  return g;
+}
+const doseText = e => (e.sets && e.reps ? `${e.sets} × ${e.reps}` : e.sets ? `${e.sets} series` : String(e.reps || ''));
+function progressEx(e, dir, id) {
+  const out = { ...e, id, chg: 'keep', was: '' };
+  const g = ensureProg(e), p = repParts(e.reps);
+  if (!g || !p) return out;
+  out.prog = g;
+  let n = p.n, sets = parseInt(e.sets, 10) || 0;
+  if (dir === 'up') {
+    if (n + g.step <= g.max) n += g.step;
+    else if (sets && sets < g.maxSets) { sets++; n = Math.max(g.min, g.max - 2 * g.step); }
+    else out.chg = 'top';
+  } else if (dir === 'down') {
+    if (n - g.step >= Math.max(1, g.min - 2 * g.step)) n -= g.step;
+    else if (sets > 2) sets--;
+  }
+  if (n !== p.n || sets !== (parseInt(e.sets, 10) || 0)) {
+    out.chg = dir; out.was = doseText(e);
+    out.reps = n + p.suf; if (sets) out.sets = String(sets);
+  }
+  return out;
+}
+function progressHiit(h, dir) {
+  const c = hiitCfg({ hiit: h }), out = { ...c, on: true };
+  if (dir === 'up' && c.work + 5 <= 45 && c.rest - 5 >= 15) { out.work = c.work + 5; out.rest = c.rest - 5; }
+  else if (dir === 'down' && c.work - 5 >= 20) { out.work = c.work - 5; out.rest = c.rest + 5; }
+  return out;
+}
+function progressWorkout(x, fb, id, provisional) {
+  const rpe = fb && Number(fb.rpe) ? Number(fb.rpe) : null;
+  const adj = provisional ? 'pending' : !fb ? 'miss' : !rpe ? 'norpe' : rpe <= 6 ? 'up' : rpe <= 8 ? 'keep' : 'down';
+  const dir = adj === 'up' || adj === 'down' ? adj : 'keep';
+  const isHiit = !!(x.hiit && x.hiit.on);
+  const out = { ...x, id, adj, lastRpe: rpe, was: '' };
+  out.exercises = (x.exercises || []).map((e, j) => {
+    const skipped = fb && fb.exercises && fb.exercises[e.id] && fb.exercises[e.id].done === false;
+    return progressEx(e, isHiit || skipped ? 'keep' : dir, `${id}-${j}`);
+  });
+  if (isHiit) {
+    out.hiit = progressHiit(x.hiit, dir);
+    const a = hiitCfg(x), b = out.hiit;
+    if (a.work !== b.work || a.rest !== b.rest) out.was = `${a.work} s de trabajo / ${a.rest} s de descanso`;
+    else if (dir !== 'keep') out.adj = dir === 'up' ? 'top' : 'keep';
+  } else if (dir === 'up' && out.exercises.length && out.exercises.every(e => e.chg === 'top' || e.chg === 'keep')) out.adj = 'top';
+  out.planNote = {
+    pending: '',
+    up: `La semana pasada marcaste esfuerzo ${rpe}/10. Esta semana sube un poco.`,
+    keep: `La semana pasada marcaste esfuerzo ${rpe}/10. Esta semana lo repetimos igual para afianzarlo.`,
+    down: `La semana pasada marcaste esfuerzo ${rpe}/10. Esta semana bajamos un poco para recuperar.`,
+    top: `La semana pasada marcaste esfuerzo ${rpe}/10. Ya estás en lo más alto de este entreno, así que se repite hasta que tu entrenador lo cambie.`,
+    miss: 'La semana pasada no hiciste este entreno. Se repite igual.',
+    norpe: 'La semana pasada no marcaste el esfuerzo, así que se repite igual.'
+  }[out.adj];
+  return out;
+}
+function buildNext(P, start, provisional, keep) {
+  const id = keep ? keep.id : 'plan-' + start, n = keep && keep.plan && keep.plan.n ? keep.plan.n : ((P.plan && P.plan.n) || 0) + 1;
+  return {
+    id, order: keep ? keep.order : (Number(P.order) || 0) + 1, title: keep ? keep.title : `${(P.plan && P.plan.name) || 'Plan'} · Semana ${n}`,
+    startDate: start, focus: P.focus || '', plan: { auto: true, name: (P.plan && P.plan.name) || 'Plan', n, from: P.id, provisional: !!provisional },
+    workouts: (P.workouts || []).map((x, i) => {
+      const mine = keep && (keep.workouts || [])[i];
+      return mine && S.feedback[mine.id] ? mine : progressWorkout(x, provisional ? null : S.feedback[x.id], `${id}-${i}`, provisional);
+    }),
+    updatedAt: new Date().toISOString()
+  };
+}
+const planSeen = new Set();
+let planBusy = false;
+async function syncPlan() {
+  if (planBusy || !S.gotWeeks || !S.gotFb || !S.db || S.planOff || S.edit) return;
+  const dated = S.weeks.filter(w => parseD(w.startDate)).sort((a, b) => a.startDate.localeCompare(b.startDate));
+  const last = dated[dated.length - 1];
+  if (!last || !last.plan || !last.plan.auto) return;
+  const mon = mondayOf(new Date()), M = isoD(mon), N = isoD(new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 7));
+  if (planSeen.has(M)) return;
+  const prevOf = d => [...dated].reverse().find(w => w.startDate < d);
+  const put = async w => { await write('weeks/' + w.id, ref => ref.set(w)); const i = S.weeks.findIndex(z => z.id === w.id); if (i >= 0) S.weeks[i] = w; else S.weeks.push(w); };
+  planBusy = true;
+  try {
+    let cur = dated.find(w => w.startDate === M);
+    const P = prevOf(M);
+    if (!cur && P && P.plan && P.plan.auto) { cur = buildNext(P, M, false); await put(cur); }
+    else if (cur && cur.plan && cur.plan.auto && cur.plan.provisional) { cur = P ? buildNext(P, M, false, cur) : { ...cur, plan: { ...cur.plan, provisional: false } }; await put(cur); }
+    if (cur && cur.plan && cur.plan.auto && !dated.some(w => w.startDate > M)) await put(buildNext(cur, N, true));
+    planSeen.add(M);
+    render();
+  } catch {} finally { planBusy = false; }
+}
+const ADJ = { up: ['↑', 'Sube'], keep: ['=', 'Igual'], down: ['↓', 'Baja'], top: ['★', 'Al tope'], miss: ['=', 'No hecho: se repite'], norpe: ['=', 'Sin esfuerzo marcado: se repite'], pending: ['…', 'Pendiente'] };
+
 /* ================= HISTORY ================= */
 const localIso = iso => { const d = new Date(iso); return isNaN(d) ? '' : isoD(d); };
 /* The day a workout was done: first time it was sent (later edits keep it). */
@@ -724,7 +826,7 @@ function renderAthlete() {
       <div class="hero-row">${ring(done, total)}<div class="txt"><span class="big">${msg}</span>${weekKm ? `<span class="runsum">${ic('run')}${fmtKm(weekKm)} km corridos</span>` : ''}${w.focus ? `<span class="focus">${esc(w.focus)}</span>` : ''}</div></div>
       ${start ? `<div class="days" aria-label="Días de la semana">${strip}</div>` : ''}
     </div></section>
-    <div class="wrap section stack">${ro}${cards || `<p class="muted">Esta semana no tiene entrenos.</p>`}
+    <div class="wrap section stack">${ro}${w.plan && w.plan.provisional ? `<div class="banner plan">Semana provisional. Cuando empiece, se ajustará sola con el esfuerzo que marques esta semana.</div>` : ''}${cards || `<p class="muted">Esta semana no tiene entrenos.</p>`}
       ${start ? runSection(start) : ''}</div>`, dock: athTabs() };
 }
 
@@ -765,6 +867,7 @@ function renderWorkout(wid, ro) {
       ${ci && !vOpen ? `<img class="ximg" src="${esc(ci.src)}" alt="${esc(e.name)}" loading="lazy"${ci.try ? ' data-try' : ''}>` : ''}
       ${thumb ? `<button type="button" class="ythumb" data-act="vid" data-id="${esc(e.id)}" aria-label="Ver vídeo de ${esc(e.name)}"><img src="${esc(ytThumb(cv.m))}" alt="" loading="lazy"><span class="pb"><span>${ic('play')}</span></span></button>` : ''}
       ${pills.length ? `<div class="pills">${pills.join('')}</div>` : ''}
+      ${(e.chg === 'up' || e.chg === 'down') && e.was ? `<p class="chg ${e.chg}">${e.chg === 'up' ? '↑ Sube' : '↓ Baja'} · antes ${esc(e.was)}</p>` : ''}
       ${e.notes ? `<p class="xnote">${esc(e.notes)}</p>` : ''}
       ${vOpen ? playerHtml(cv, e) : ''}
       ${((cv && !thumb) || vOpen || lm) ? `<div class="xlinks">
@@ -824,6 +927,7 @@ function renderWorkout(wid, ro) {
     </div></section>
     <div class="wrap section stack">
       ${ro}
+      ${x.planNote ? `<div class="info plan adj-${esc(x.adj)}"><span class="icb">${esc((ADJ[x.adj] || ADJ.keep)[0])}</span><span class="eyebrow">Progresión</span><p>${esc(x.planNote)}${x.was ? ` Antes: ${esc(x.was)}.` : ''}</p></div>` : ''}
       ${x.warmup ? `<div class="info"><span class="icb">${ic('flame')}</span><span class="eyebrow">Calentamiento</span><p>${esc(x.warmup)}</p></div>` : ''}
       ${hc.on && exs.length ? `<section class="hiitcard"><div class="headrow"><div><span class="hiit-tag">${ic('flame')}HIIT</span><h2 style="margin-top:6px">Temporizador</h2></div></div>
         ${hiitSummary(hc, exs.length)}
@@ -848,6 +952,7 @@ async function sendFeedback(wid) {
   const { week, workout } = found;
   const d = getDraft(wid);
   if (!d.feeling) { toast('Elige cómo te ha ido tocando una cara.'); document.getElementById('fb')?.scrollIntoView({ behavior: 'smooth' }); return; }
+  if (!d.rpe) { toast('Marca el esfuerzo del 1 al 10. Con eso se ajusta el entreno de la semana que viene.'); document.getElementById('fb')?.scrollIntoView({ behavior: 'smooth' }); return; }
   const prev = S.feedback[wid];
   const mins = parseInt(d.minutes, 10);
   const body = {
@@ -917,9 +1022,11 @@ function renderCoach() {
     const { done, total } = weekDone(w);
     const armed = S.armed === 'wk:' + w.id;
     return `<article class="wkcard">
-      <div class="top2"><div><span class="eyebrow">${esc(weekRange(w.startDate) || 'Sin fecha')}</span><h3>${esc(w.title || 'Semana ' + (i + 1))}</h3></div>
+      <div class="top2"><div><span class="eyebrow">${esc(weekRange(w.startDate) || 'Sin fecha')}</span><h3>${esc(w.title || 'Semana ' + (i + 1))}</h3>${w.plan && w.plan.auto ? `<span class="chip auto">${w.plan.provisional ? 'Provisional · se ajusta al empezar' : 'Progresión automática'}</span>` : ''}</div>
         <button type="button" class="btn" data-act="editwk" data-id="${esc(w.id)}">${ic('edit')}Editar</button></div>
-      <div class="wklist">${(w.workouts || []).map(x => `<span class="${S.feedback[x.id] ? 'ok' : ''}">${S.feedback[x.id] ? '✓ ' : ''}${(w.workouts || []).indexOf(x) + 1}. ${esc(x.title || 'Entreno')}</span>`).join('')}</div>
+      <div class="wklist">${(w.workouts || []).map(x => `<span class="${S.feedback[x.id] ? 'ok' : ''}">${S.feedback[x.id] ? '✓ ' : ''}${(w.workouts || []).indexOf(x) + 1}. ${esc(x.title || 'Entreno')}${x.adj && x.adj !== 'pending' && ADJ[x.adj] ? ` <b title="${esc(ADJ[x.adj][1])}">${ADJ[x.adj][0]}</b>` : ''}${S.feedback[x.id] && S.feedback[x.id].rpe ? ` · RPE ${S.feedback[x.id].rpe}` : ''}</span>`).join('')}</div>
+      ${(() => { const tops = (w.workouts || []).flatMap(x => (x.exercises || []).filter(e => e.chg === 'top').map(e => e.name)).concat((w.workouts || []).filter(x => x.adj === 'top' && x.hiit && x.hiit.on).map(x => x.title));
+        return tops.length ? `<p class="banner">Al tope, no puede subir más: ${tops.map(esc).join(', ')}. Cámbialo por una variante más difícil.</p>` : ''; })()}
       <div class="wkbar"><div class="bar"><i style="width:${total ? Math.round(done / total * 100) : 0}%"></i></div><span class="mono">${done}/${total}</span> hechos</div>
       ${(() => { const rs = runsFrom(parseD(w.startDate)); if (!rs.length) return ''; const km = rs.filter(r => r.done).reduce((a, r) => a + (r.km || 0), 0);
         return `<div class="wklist">${rs.map(r => `<span class="run ${r.done ? '' : 'plan'}">${ic('run')}${esc(dayShort(r.date))} · ${r.done ? esc(r.km ? fmtKm(r.km) + ' km' : fmtLong(r.durationSec)) : 'planificada'}</span>`).join('')}</div>
@@ -933,6 +1040,9 @@ function renderCoach() {
   return { dock: tabbar, html: `<div class="wrap section stack">${ro}
     <div class="headrow"><div><span class="eyebrow">${S.weeks.length} semana${S.weeks.length === 1 ? '' : 's'}</span><h2>Programación</h2></div>
       <button type="button" class="btn primary" data-act="newwk">${ic('plus')}Nueva semana</button></div>
+    ${S.weeks.some(w => w.plan && w.plan.auto) ? `<div class="planbox"><div><b>Progresión automática ${S.planOff ? 'en pausa' : 'activada'}</b>
+      <p class="muted">Cada lunes se crea la semana nueva con el esfuerzo (RPE) de cada entreno: 1–6 sube, 7–8 se repite, 9–10 baja. ↑ sube · = igual · ↓ baja.</p></div>
+      <button type="button" class="btn" data-act="plantoggle" ${S.canWrite ? '' : 'disabled'}>${S.planOff ? 'Reanudar' : 'Pausar'}</button></div>` : ''}
     ${cards || `<div class="empty"><h3>Aún no hay semanas</h3><p class="muted">Crea la primera semana con sus entrenos. Papá la verá en su vista en cuanto la guardes.</p><button type="button" class="btn primary" data-act="newwk">${ic('plus')}Crear semana 1</button></div>`}
   </div>` };
 }
@@ -1025,6 +1135,7 @@ function renderEditor(ro) {
   const html = `<div class="wrap section stack">${ro}
     <button type="button" class="btn ghost" data-act="cancelwk" style="align-self:flex-start;padding-left:0">${ic('back')}Programación</button>
     <h2>${S.edit.isNew ? 'Nueva semana' : 'Editar semana'}</h2>
+    ${d.plan && d.plan.provisional ? `<div class="banner">Esta semana es provisional. Si la guardas con cambios, ya no se ajustará sola con el feedback de la semana anterior.</div>` : ''}
     <div class="grid2">
       <label class="f"><span>Empieza el lunes</span><input class="inp" type="date" id="f-wk-start" data-bind="wk:startDate" value="${esc(d.startDate)}"></label>
       <label class="f"><span>Nombre de la semana</span><input class="inp" id="f-wk-title" data-bind="wk:title" value="${esc(d.title)}" placeholder="Semana 1 · Adaptación"></label>
@@ -1060,8 +1171,9 @@ async function saveWeek() {
   delete d.openWo;
   d.workouts = d.workouts.map(x => ({
     id: x.id, title: t(x.title), format: t(x.format), warmup: t(x.warmup), notes: t(x.notes),
+    ...(x.adj ? { adj: x.adj, planNote: x.planNote || '', was: x.was || '', lastRpe: x.lastRpe ?? null } : {}),
     hiit: x.hiit && x.hiit.on ? hiitCfg(x) : null,
-    exercises: x.exercises.map(e => ({ id: e.id, name: t(e.name), sets: t(e.sets), reps: t(e.reps), load: t(e.load), rest: t(e.rest), notes: t(e.notes), video: normUrl(e.video), videoAsset: validAsset(e.videoAsset), imageAsset: validAsset(e.imageAsset), _had: e._had || '' })).filter(e => e.name)
+    exercises: x.exercises.map(e => ({ id: e.id, name: t(e.name), sets: t(e.sets), reps: t(e.reps), load: t(e.load), rest: t(e.rest), notes: t(e.notes), video: normUrl(e.video), videoAsset: validAsset(e.videoAsset), imageAsset: validAsset(e.imageAsset), ...(e.prog ? { prog: e.prog } : {}), ...(e.chg ? { chg: e.chg, was: e.was || '' } : {}), _had: e._had || '' })).filter(e => e.name)
   })).filter(x => x.title || x.exercises.length);
   if (!d.title) d.title = 'Semana ' + (S.weeks.findIndex(w => w.id === d.id) + 1 || S.weeks.length + 1);
   const allEx = d.workouts.flatMap(x => x.exercises);
@@ -1077,10 +1189,11 @@ async function saveWeek() {
   });
   allEx.forEach(e => { delete e._had; });
   d.updatedAt = new Date().toISOString();
+  if (d.plan && d.plan.provisional) d.plan = { ...d.plan, provisional: false, edited: true };
   try {
     await write('weeks/' + d.id, ref => ref.set(d));
     for (const [name, patch] of libPatches) if (Object.keys(patch).length) await saveLib(name, patch);
-    S.edit = null; S.armed = null; toast('Semana guardada. Papá ya la puede ver.');
+    S.edit = null; S.armed = null; toast('Semana guardada. Papá ya la puede ver.'); setTimeout(syncPlan, 0);
     render(true); window.scrollTo({ top: 0 });
   } catch {}
 }
@@ -1321,7 +1434,7 @@ async function onClick(e) {
       const draft = clone(w); draft.workouts = (draft.workouts || []).map(x => ({ ...blankWo(), ...x, exercises: (x.exercises || []).map(ex => prepEx({ ...blankEx(), ...ex })) }));
       S.edit = { isNew: false, dirty: false, openWo: 0, draft }; render(true); return window.scrollTo({ top: 0 }); }
     case 'dupwk': { const w = S.weeks.find(x => x.id === id); if (!w) return;
-      const c = clone(w); c.id = uid(); c.order = nextOrder(); c.title = `Semana ${S.weeks.length + 1}`; c.startDate = nextStart(); delete c.updatedAt;
+      const c = clone(w); c.id = uid(); c.order = nextOrder(); c.title = `Semana ${S.weeks.length + 1}`; c.startDate = nextStart(); delete c.updatedAt; delete c.plan;
       c.workouts = (c.workouts || []).map(x => ({ ...blankWo(), ...x, id: uid(), exercises: (x.exercises || []).map(ex => prepEx({ ...blankEx(), ...ex, id: uid() })) }));
       S.edit = { isNew: true, dirty: true, openWo: 0, draft: c }; toast('Copia lista. Ajusta lo que quieras y guarda.'); render(true); return window.scrollTo({ top: 0 }); }
     case 'delwk':
@@ -1329,7 +1442,10 @@ async function onClick(e) {
       S.armed = null;
       try { await write('weeks/' + id, ref => ref.delete()); toast('Semana eliminada.'); } catch {}
       return render(true);
-    case 'cancelwk': S.edit = null; render(true); return window.scrollTo({ top: 0 });
+    case 'plantoggle':
+      try { const off = !S.planOff; await write('weeks/_plan', ref => ref.set({ off, updatedAt: new Date().toISOString() })); S.planOff = off; toast(off ? 'Progresión automática en pausa.' : 'Progresión automática activada.'); render(true); if (!off) syncPlan(); } catch {}
+      return;
+    case 'cancelwk': S.edit = null; setTimeout(syncPlan, 0); render(true); return window.scrollTo({ top: 0 });
     case 'savewk': return saveWeek();
     case 'wotoggle': S.edit.openWo = S.edit.openWo === wi ? -1 : wi; render(true);
       return document.querySelectorAll('.acc')[wi]?.scrollIntoView({ block: 'start', behavior: 'smooth' });
@@ -1373,9 +1489,11 @@ async function boot() {
   S.db = db; S.assets = assetStore; S.status = 'ready';
   render();
   db.collection('weeks').onSnapshot(snap => {
-    S.weeks = snap.docs.map(d => ({ ...d.data(), id: d.id }))
+    const cfg = snap.docs.find(d => d.id === '_plan');
+    S.planOff = !!(cfg && cfg.data().off);
+    S.weeks = snap.docs.filter(d => d.id !== '_plan').map(d => ({ ...d.data(), id: d.id }))
       .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || String(a.startDate || '').localeCompare(String(b.startDate || '')));
-    S.gotWeeks = true; render();
+    S.gotWeeks = true; render(); syncPlan();
   }, err => { toast(errMsg(err)); });
   db.collection('library').onSnapshot(snap => {
     const m = {}; snap.docs.forEach(d => { m[d.id] = d.data(); });
@@ -1383,7 +1501,7 @@ async function boot() {
   }, () => {});
   db.collection('feedback').onSnapshot(snap => {
     const m = {}; snap.docs.forEach(d => { m[d.id] = { ...d.data(), workoutId: d.id }; });
-    S.feedback = m; S.gotFb = true; render();
+    S.feedback = m; S.gotFb = true; render(); syncPlan();
   }, err => { toast(errMsg(err)); });
   db.collection('runs').onSnapshot(snap => {
     const m = {}; snap.docs.forEach(d => { const r = d.data(); if (r && parseD(r.date)) m[d.id] = { ...r, id: d.id }; });

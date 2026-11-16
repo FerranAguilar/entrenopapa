@@ -35,3 +35,12 @@ Desde el móvil, abre cada enlace y usa **Añadir a pantalla de inicio** para te
 - Sin logins: cualquiera que tenga la dirección de la web puede leer y cambiar los datos. No compartas los enlaces fuera de la familia.
 
 En el plan gratuito, Supabase pausa los proyectos que pasan una semana sin uso. Si la web dice que no hay conexión, entra en supabase.com y pulsa **Restore project**.
+
+## Progresión automática
+
+Las semanas que tienen `plan.auto` forman un plan que avanza solo. Al abrir cualquiera de las dos páginas en una semana nueva:
+
+1. La semana que empieza se recalcula a partir de la anterior, entreno por entreno, con el esfuerzo (RPE) que marcó Papá: **1–6 sube**, **7–8 se repite**, **9–10 baja**. Si no hizo el entreno, se repite igual.
+2. Se añade una semana más, provisional, que se ajustará cuando le toque.
+
+En fuerza, subir es una repetición más por serie hasta el máximo del ejercicio (`prog.max`) y después una serie más; en HIIT, 5 s más de trabajo y 5 s menos de descanso (hasta 45/15). Una semana provisional que el entrenador edita a mano deja de ajustarse sola. La progresión se pausa desde la página de entrenador (documento `weeks/_plan`).
